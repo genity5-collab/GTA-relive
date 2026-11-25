@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const V = '1795615868';
+const V = '1795616865';
 const S = 6, HALFW = 3000;
 const mx2x = mx => mx * S - HALFW, my2z = my => HALFW - my * S;
 
@@ -167,6 +167,71 @@ function updateChunks() {
   }
 }
 
+
+// ================= ROADS: terrain-following ribbons, merged per chunk (1 draw call per chunk) =================
+// widths in world units (1 map unit = 6 world units). street ~9, main ~14, freeway ~26.
+const ROAD_W = [9, 14, 26];
+const roadMat = new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+function buildRoads(roads) {
+  const buckets = new Map();
+  const put = (key, arr) => { let b = buckets.get(key); if (!b) buckets.set(key, b = { pos: [], col: [], idx: [] }); return b; };
+  const C_ASPH = [[0.20, 0.20, 0.21], [0.17, 0.17, 0.18], [0.14, 0.14, 0.15]];
+  const C_WALK = [0.62, 0.61, 0.58], C_LINE = [0.92, 0.92, 0.88], C_YEL = [0.9, 0.72, 0.15], C_RAIL = [0.55, 0.56, 0.58];
+  // smooth a polyline with Catmull-Rom style subdivision so curves aren't jagged, then resample ~every 14 world units
+  function resample(pts) {
+    const out = []; const n = pts.length;
+    for (let i = 0; i < n - 1; i++) {
+      const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(n - 1, i + 2)];
+      const len = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]); const steps = Math.max(1, Math.round(len / 14));
+      for (let s = 0; s < steps; s++) {
+        const t = s / steps, t2 = t * t, t3 = t2 * t;
+        out.push([0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3),
+                  0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)]);
+      }
+    }
+    out.push(pts[n - 1]); return out;
+  }
+  function strip(b, P, off0, off1, lift, c) {      // a ribbon between lateral offsets off0..off1 along the path
+    const base = b.pos.length / 3;
+    for (let i = 0; i < P.length; i++) {
+      const a = P[Math.max(0, i - 1)], d = P[Math.min(P.length - 1, i + 1)];
+      let tx = d[0] - a[0], tz = d[1] - a[1]; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l; const nx = -tz, nz = tx;
+      for (const o of [off0, off1]) { const x = P[i][0] + nx * o, z = P[i][1] + nz * o; b.pos.push(x, Math.max(hAt(x, z), 0) + lift + P[i][2], z); b.col.push(c[0], c[1], c[2]); }
+    }
+    for (let i = 0; i < P.length - 1; i++) { const k = base + i * 2; b.idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
+  }
+  let tris = 0;
+  roads.forEach(r => {
+    const raw = []; for (let i = 0; i < r.p.length; i += 2) raw.push([mx2x(r.p[i]), my2z(r.p[i + 1])]);
+    if (raw.length < 2) return;
+    const P = resample(raw); const cls = r.c, W = ROAD_W[cls] / 2;
+    // freeway deck: lift over dips so it reads as an embankment/bridge (height = how far the road sits below its smoothed neighbours)
+    for (const p of P) p[2] = 0;
+    if (cls === 2) for (let i = 0; i < P.length; i++) { let m = -1e9; for (let j = Math.max(0, i - 4); j <= Math.min(P.length - 1, i + 4); j++) m = Math.max(m, hAt(P[j][0], P[j][1])); P[i][2] = Math.max(0, Math.min(14, m - hAt(P[i][0], P[i][1]))) ; }
+    // split into per-chunk runs so culling works
+    let run = [], runKey = null;
+    const flush = () => { if (run.length > 1) { const b = put(runKey); const lift = 0.35;
+        strip(b, run, -W, W, lift, C_ASPH[cls]);                               // asphalt
+        strip(b, run, -W, -W + 0.7, lift + 0.12, C_LINE); strip(b, run, W - 0.7, W, lift + 0.12, C_LINE);   // edge lines
+        if (cls >= 1) strip(b, run, -0.35, 0.35, lift + 0.14, cls === 2 ? C_LINE : C_YEL);                   // centre line (yellow on mains)
+        if (cls === 0) { strip(b, run, -W - 2.2, -W, lift + 0.05, C_WALK); strip(b, run, W, W + 2.2, lift + 0.05, C_WALK); }   // sidewalks on streets
+        if (cls === 2) { strip(b, run, -W - 0.9, -W, lift + 0.5, C_RAIL); strip(b, run, W, W + 0.9, lift + 0.5, C_RAIL); }    // freeway barriers
+        tris += run.length * 2 * (cls === 0 ? 4 : cls === 1 ? 4 : 5); }
+      run = []; };
+    P.forEach((pt, i) => { const [a, bq] = chunkOf(pt[0], pt[1]); const k = a + ',' + bq; if (runKey !== null && k !== runKey) { const last = run[run.length - 1]; run.push([pt[0], pt[1], pt[2] || 0]); flush(); run = [[last[0], last[1], last[2]]]; } runKey = k; run.push([pt[0], pt[1], pt[2] || 0]); });
+    flush();
+  });
+  buckets.forEach((b, key) => {
+    const [a, bq] = key.split(',').map(Number);
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(b.col, 3)); g.setIndex(b.idx); g.computeVertexNormals(); g.computeBoundingSphere();
+    const m = new THREE.Mesh(g, roadMat); m.visible = false; m.userData.road = true; world.add(m);
+    let ch = chunks.find(c => c.cx === a && c.cz === bq);
+    if (!ch) { ch = { cx: a, cz: bq, center: new THREE.Vector3(-HALFW + (a + .5) * CS, 0, -HALFW + (bq + .5) * CS), meshes: [] }; chunks.push(ch); }
+    ch.meshes.push(m);
+  });
+  window.__roadStats = { chunks: buckets.size, approxTris: tris };
+}
+
 // ================= BIRDS (few, cheap, only update when near the camera) =================
 let birds, flock = [], birdMatH = new THREE.Matrix4();
 function buildBirds(anchors) {
@@ -196,10 +261,10 @@ const districts = [['Los Santos', 800, 255, 900], ['San Fierro', 165, 500, 900],
 
 // ================= MAIN =================
 async function main() {
-  const [aerial, detail, hImg, airports, buildings, homes, schools, TR, BD, BR] = await Promise.all([
+  const [aerial, detail, hImg, airports, buildings, homes, schools, TR, BD, BR, ROADS] = await Promise.all([
     loadTex('assets/sa_aerial_2k.jpg?v=' + V), loadTex('assets/detail.jpg?v=' + V), loadImg('assets/sa_height.png?v=' + V),
     loadJSON('assets/airports.json'), loadJSON('assets/buildings.json'), loadJSON('assets/homes.json'), loadJSON('assets/schools.json'),
-    loadBin('trees'), loadBin('buildings'), loadBin('birds'),
+    loadBin('trees'), loadBin('buildings'), loadBin('birds'), loadJSON('assets/roads.json?v=' + V),
   ]);
   aerial.colorSpace = THREE.SRGBColorSpace; aerial.anisotropy = 4; detail.wrapS = detail.wrapT = THREE.RepeatWrapping; detail.colorSpace = THREE.SRGBColorSpace;
   const c = document.createElement('canvas'); c.width = c.height = HN; const cx = c.getContext('2d'); cx.drawImage(hImg, 0, 0, HN, HN);
@@ -232,7 +297,7 @@ async function main() {
     if (name && name !== 'Safehouse') addTag(name, tcol, mx2x(mx), my2z(my), 70);
   }));
 
-  buildChunks(TR, BD, BR); buildBirds(BR);
+  buildChunks(TR, BD, BR); buildRoads(ROADS); buildBirds(BR);
   const stats = { chunks: chunks.length, trees: TR.length / 4, buildings: BD.length / 7 }; window.__stats = stats;
   document.getElementById('load').remove(); applyTime('day');
   camera.position.set(-1500, 2300, 3600); controls.target.set(0, 0, 0); presets['1'](); updateChunks(); frame();
