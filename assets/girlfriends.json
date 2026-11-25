@@ -1,0 +1,62 @@
+[
+    {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [900, 215]
+        },
+        "properties": {
+            "name": "Denise Robinson"
+        }
+    },
+    {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [840, 953]
+        },
+        "properties": {
+            "name": "Millie Perkins"
+        }
+    },
+    {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [436, 261]
+        },
+        "properties": {
+            "name": "Helena Wankstein"
+        }
+    },
+    {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [72, 691]
+        },
+        "properties": {
+            "name": "Katie Zhan"
+        }
+    },
+    {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [199, 701]
+        },
+        "properties": {
+            "name": "Michelle Cannes"
+        }
+    },
+    {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [266, 939]
+        },
+        "properties": {
+            "name": "Barbara Schternvart"
+        }
+    }
+]
