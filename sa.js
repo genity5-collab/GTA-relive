@@ -59,15 +59,29 @@ const loadTex = u => new Promise((res, rej) => new THREE.TextureLoader().load(u,
 const loadImg = u => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = u; });
 const loadJSON = u => fetch(u).then(r => r.json());
 const loadBin = k => fetch('assets/' + k + '.bin?v=' + V).then(r => r.arrayBuffer()).then(b => new Float32Array(b));
-let heightData, HN = 512, terrain;
-const MAXH = 420;
+const loadHeights = () => fetch('assets/height.bin?v=' + V).then(r => r.arrayBuffer()).then(b => { const u = new Uint16Array(b), f = new Float32Array(u.length); for (let i = 0; i < u.length; i++) f[i] = u[i] / 100; return f; });
+let heightData, HN = 1024, terrain, fineTerrain;
+const HCELL = (HALFW * 2) / (1024 - 1);          // world size of one height texel (about 5.9)
 function hAt(wx, wz) {
   const u = (wx + HALFW) / (2 * HALFW), v = (wz + HALFW) / (2 * HALFW);
   if (u < 0 || u > 1 || v < 0 || v > 1) return 0;
-  const x = u * (HN - 1), y = v * (HN - 1), x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
-  const g = (i, j) => heightData[Math.min(HN - 1, j) * HN + Math.min(HN - 1, i)];
-  return ((g(x0, y0) * (1 - fx) + g(x0 + 1, y0) * fx) * (1 - fy) + (g(x0, y0 + 1) * (1 - fx) + g(x0 + 1, y0 + 1) * fx) * fy) * MAXH;
+  const x = u * (HN - 1), y = v * (HN - 1), x0 = Math.min(HN - 2, Math.floor(x)), y0 = Math.min(HN - 2, Math.floor(y)), fx = x - x0, fy = y - y0;
+  const i = y0 * HN + x0, a = heightData[i], b = heightData[i + 1], c = heightData[i + HN], d = heightData[i + HN + 1];
+  return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
 }
+
+
+// Height of the coarse terrain mesh exactly as the GPU draws it (same triangle split as PlaneGeometry), so far objects never hover above it.
+function drawnAt(wx, wz) {
+  const seg = Q.seg, u = (wx + HALFW) / (2 * HALFW) * seg, v = (wz + HALFW) / (2 * HALFW) * seg;
+  if (u < 0 || v < 0 || u > seg || v > seg) return 0;
+  const i = Math.min(seg - 1, Math.floor(u)), j = Math.min(seg - 1, Math.floor(v)), fx = u - i, fy = v - j, cs = (2 * HALFW) / seg;
+  const g = (a, b) => hAt(a * cs - HALFW, b * cs - HALFW);
+  const A = g(i, j), B = g(i, j + 1), C = g(i + 1, j + 1), D = g(i + 1, j);
+  return fx + fy <= 1 ? A + (D - A) * fx + (B - A) * fy : C + (B - C) * (1 - fx) + (D - C) * (1 - fy);
+}
+// Where a static object stands: never above either the exact ground (near the player) or the drawn coarse ground (far away). It may sink a little, never float.
+const placeY = (wx, wz) => Math.max(Math.min(hAt(wx, wz), drawnAt(wx, wz)), 0);
 
 // ================= CHUNKED INSTANCING (only near chunks are drawn) =================
 const CH = 12, CS = (HALFW * 2) / CH;           // 12x12 chunks of 500 world units
@@ -169,7 +183,7 @@ function buildChunks(TR, BD, brAnchors) {
     const tl = tbuck.get(key) || []; const byT = [[], [], [], []]; tl.forEach(o => byT[TR[o + 3]].push(o));
     byT.forEach((list, t) => {
       if (!list.length) return; const im = new THREE.InstancedMesh(speciesGeo[t], treeMat, list.length);
-      list.forEach((o, k) => { const wx = mx2x(TR[o]), wz = my2z(TR[o + 1]), sc = TR[o + 2] * 1.1; q.setFromAxisAngle(up, (o * 12.9898 % 6.28)); pv.set(wx, Math.max(hAt(wx, wz), 0) - 0.4, wz); sv.set(sc, sc * (0.9 + (o % 7) * 0.04), sc); m4.compose(pv, q, sv); im.setMatrixAt(k, m4); });
+      list.forEach((o, k) => { const wx = mx2x(TR[o]), wz = my2z(TR[o + 1]), sc = TR[o + 2] * 1.1; q.setFromAxisAngle(up, (o * 12.9898 % 6.28)); pv.set(wx, placeY(wx, wz) - 0.5, wz); sv.set(sc, sc * (0.9 + (o % 7) * 0.04), sc); m4.compose(pv, q, sv); im.setMatrixAt(k, m4); });
       im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); im.userData.tree = true; ch.meshes.push(im);
     });
     // buildings
@@ -180,7 +194,7 @@ function buildChunks(TR, BD, brAnchors) {
       const im = new THREE.InstancedMesh(unit, bMat, list.length); const pal = palette[kd];
       const roofs = kd === 2 ? new THREE.InstancedMesh(houseRoof, hRoofMat, list.length) : null; const caps = kd <= 1 ? new THREE.InstancedMesh(unit, roofMat, list.length) : null;
       list.forEach((o, k) => {
-        const wx = mx2x(BD[o]), wz = my2z(BD[o + 1]), w = BD[o + 2], d = BD[o + 3], h = BD[o + 4], rot = BD[o + 5], y = Math.max(hAt(wx, wz), 0);
+        const wx = mx2x(BD[o]), wz = my2z(BD[o + 1]), w = BD[o + 2], d = BD[o + 3], h = BD[o + 4], rot = BD[o + 5], y = placeY(wx, wz);
         q.setFromAxisAngle(up, rot); pv.set(wx, y - 1, wz); sv.set(w, h + 1, d); m4.compose(pv, q, sv); im.setMatrixAt(k, m4); im.setColorAt(k, col.setHex(pal[(o * 7) % pal.length]));
         if (roofs) { sv.set(w * 1.1, h * 0.8 + 3, d * 1.1); pv.set(wx, y + h - 0.5, wz); m4.compose(pv, q, sv); roofs.setMatrixAt(k, m4); }
         if (caps) { sv.set(w * 0.5, 2.5 + (o % 3), d * 0.5); pv.set(wx, y + h, wz); m4.compose(pv, q, sv); caps.setMatrixAt(k, m4); }
@@ -193,7 +207,7 @@ function buildChunks(TR, BD, brAnchors) {
         groups.forEach((gl, mn) => {
           const P = PROPS[mn]; if (!P) return; const dm = new THREE.InstancedMesh(P.geo, propMat, gl.length);
           gl.forEach((o, k) => {
-            const wx = mx2x(BD[o]), wz = my2z(BD[o + 1]), w = BD[o + 2], d = BD[o + 3], h = BD[o + 4], rot = BD[o + 5], y = Math.max(hAt(wx, wz), 0);
+            const wx = mx2x(BD[o]), wz = my2z(BD[o + 1]), w = BD[o + 2], d = BD[o + 3], h = BD[o + 4], rot = BD[o + 5], y = placeY(wx, wz);
             q.setFromAxisAngle(up, rot); pv.set(wx, y - 0.4, wz); sv.set(w / P.size[0], (h + 0.4) / P.size[1], d / P.size[2]); m4.compose(pv, q, sv); dm.setMatrixAt(k, m4);
           });
           dm.instanceMatrix.needsUpdate = true; dm.computeBoundingSphere(); dm.userData.near = true; ch.meshes.push(dm);
@@ -241,7 +255,7 @@ function buildRoads(roads) {
     for (let i = 0; i < P.length; i++) {
       const a = P[Math.max(0, i - 1)], d = P[Math.min(P.length - 1, i + 1)];
       let tx = d[0] - a[0], tz = d[1] - a[1]; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l; const nx = -tz, nz = tx;
-      [off0, off1].forEach((o, k) => { const x = P[i][0] + nx * o, z = P[i][1] + nz * o; g.pos.push(x, Math.max(hAt(x, z), 0) + lift + P[i][2], z);
+      [off0, off1].forEach((o, k) => { const x = P[i][0] + nx * o, z = P[i][1] + nz * o; g.pos.push(x, Math.max(hAt(x, z), drawnAt(x, z), 0) + lift + P[i][2], z);
         if (g.uv) g.uv.push(k * Math.abs(off1 - off0) / tile, dist[i] / tile); else g.col.push(col[0], col[1], col[2]); });
     }
     for (let i = 0; i < P.length - 1; i++) { const k = base + i * 2; g.idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
@@ -296,7 +310,7 @@ function buildStreetProps(SP, types) {
     const by = new Map(); list.forEach(o => { const t = types[SP[o + 3]]; let g = by.get(t); if (!g) by.set(t, g = []); g.push(o); });
     by.forEach((gl, t) => {
       const P = PROPS[t]; if (!P) return; const im = new THREE.InstancedMesh(P.geo, propMat, gl.length); const sc = PROP_H[t] / P.size[1];
-      gl.forEach((o, k) => { const wx = mx2x(SP[o]), wz = my2z(SP[o + 1]); q.setFromAxisAngle(up, SP[o + 2]); pv.set(wx, Math.max(hAt(wx, wz), 0) - P.min[1] * sc + 0.1, wz); sv.set(sc, sc, sc); m4.compose(pv, q, sv); im.setMatrixAt(k, m4); });
+      gl.forEach((o, k) => { const wx = mx2x(SP[o]), wz = my2z(SP[o + 1]); q.setFromAxisAngle(up, SP[o + 2]); pv.set(wx, placeY(wx, wz) - P.min[1] * sc + 0.05, wz); sv.set(sc, sc, sc); m4.compose(pv, q, sv); im.setMatrixAt(k, m4); });
       im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); im.userData.small = true; im.visible = false; world.add(im); ch.meshes.push(im); n += gl.length;
     });
   });
@@ -327,31 +341,94 @@ function updateBirds(t, dt) {
 
 const districts = [['Los Santos', 800, 255, 900], ['San Fierro', 165, 500, 900], ['Las Venturas', 835, 715, 900]];
 
+// ================= FINE TERRAIN: one vertex per height texel around the player, so everything sits exactly on the drawn ground =================
+const FN = 150;                                   // 150 x 150 cells x 5.87 units = about 880 units across (about 45k triangles)
+let fineGeo, fineCX = 1e9, fineCZ = 1e9;
+function buildFineTerrain(mat) {
+  fineGeo = new THREE.PlaneGeometry(1, 1, FN, FN); fineGeo.rotateX(-Math.PI / 2);
+  const n = (FN + 1) * (FN + 1); fineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3)); fineGeo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  fineGeo.deleteAttribute('uv');
+  fineTerrain = new THREE.Mesh(fineGeo, mat); fineTerrain.frustumCulled = false; fineTerrain.renderOrder = 0; scene.add(fineTerrain);
+  fineTerrain.visible = false;
+}
+function updateFineTerrain(px, pz) {
+  if (!fineTerrain) return;
+  const ix = Math.round((px + HALFW) / HCELL), iz = Math.round((pz + HALFW) / HCELL);
+  if (ix === fineCX && iz === fineCZ) return; fineCX = ix; fineCZ = iz;
+  const pos = fineGeo.attributes.position, nor = fineGeo.attributes.normal, half = FN / 2; let k = 0;
+  const hv = (i, j) => heightData[Math.max(0, Math.min(HN - 1, j)) * HN + Math.max(0, Math.min(HN - 1, i))];
+  for (let j = 0; j <= FN; j++) for (let i = 0; i <= FN; i++, k++) {
+    const gi = ix - half + i, gj = iz - half + j; const wx = gi * HCELL - HALFW, wz = gj * HCELL - HALFW;
+    const edge = (i === 0 || j === 0 || i === FN || j === FN), y = hv(gi, gj); pos.setXYZ(k, wx, y + 0.02 - (edge ? 5 : 0), wz);
+    const dx = (hv(gi + 1, gj) - hv(gi - 1, gj)) / (2 * HCELL), dz = (hv(gi, gj + 1) - hv(gi, gj - 1)) / (2 * HCELL); const l = Math.hypot(dx, 1, dz); nor.setXYZ(k, -dx / l, 1 / l, -dz / l);
+  }
+  pos.needsUpdate = nor.needsUpdate = true; fineGeo.computeBoundingSphere(); fineTerrain.visible = true;
+}
+
 // ================= MAIN =================
 async function main() {
-  const [aerial, detail, hImg, TR, BD, BR, ROADS, SP, SPT] = await Promise.all([
-    loadTex('assets/sa_aerial_2k.jpg?v=' + V), loadTex('assets/detail.jpg?v=' + V), loadImg('assets/sa_height.png?v=' + V),
+  const [aerial, detail, TR, BD, BR, ROADS, SP, SPT, gD, gN, gW] = await Promise.all([
+    loadTex('assets/sa_aerial_2k.jpg?v=' + V), loadTex('assets/detail.jpg?v=' + V),
     loadBin('trees'), loadBin('buildings'), loadBin('birds'), loadJSON('assets/roads.json?v=' + V), loadBin('street'), loadJSON('assets/street_types.json?v=' + V),
+    loadTex('assets/tex/ground_d.jpg?v=' + V), loadTex('assets/tex/ground_n.jpg?v=' + V), loadTex('assets/tex/ground_w.png?v=' + V),
   ]);
+  heightData = await loadHeights();
   aerial.colorSpace = THREE.SRGBColorSpace; aerial.anisotropy = 4; detail.wrapS = detail.wrapT = THREE.RepeatWrapping; detail.colorSpace = THREE.SRGBColorSpace;
-  const c = document.createElement('canvas'); c.width = c.height = HN; const cx = c.getContext('2d'); cx.drawImage(hImg, 0, 0, HN, HN);
-  const px = cx.getImageData(0, 0, HN, HN).data; heightData = new Float32Array(HN * HN); for (let i = 0; i < HN * HN; i++) heightData[i] = px[i * 4] / 255;
+  gD.colorSpace = THREE.SRGBColorSpace; for (const t of [gD, gN]) { t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = 4; }
+  gW.colorSpace = THREE.NoColorSpace; gW.minFilter = THREE.LinearFilter; gW.magFilter = THREE.LinearFilter; gW.generateMipmaps = false;
 
-  // terrain: realistic colour grade + tiled detail texture multiplied in the shader (gives close-up grain without a huge texture)
-  const geo = new THREE.PlaneGeometry(HALFW * 2, HALFW * 2, Q.seg, Q.seg); geo.rotateX(-Math.PI / 2);
-  const p = geo.attributes.position; for (let i = 0; i < p.count; i++) p.setY(i, hAt(p.getX(i), p.getZ(i)) - 2); geo.computeVertexNormals();
+  // ---- terrain material: aerial map colour + four real CC0 ground layers (grass, dirt, rock, sand) tiled at metre scale, with normal maps ----
   const tm = new THREE.MeshLambertMaterial({ map: aerial });
   tm.onBeforeCompile = sh => {
-    sh.uniforms.detailMap = { value: detail };
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vWorldUv;').replace('#include <uv_vertex>', '#include <uv_vertex>\nvWorldUv = position.xz * 0.045;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D detailMap; varying vec2 vWorldUv;').replace('#include <map_fragment>', `#include <map_fragment>
-      vec3 dn = texture2D(detailMap, vWorldUv).rgb;
-      vec3 dn2 = texture2D(detailMap, vWorldUv * 0.23).rgb;
-      float lumv = dot(diffuseColor.rgb, vec3(0.299,0.587,0.114));
-      diffuseColor.rgb = mix(vec3(lumv), diffuseColor.rgb, 0.82);                 // pull the cartoon saturation down
-      diffuseColor.rgb *= vec3(1.02, 1.0, 0.94) * (0.7 + 0.6 * dn * dn2.r * 1.5);   // natural grain + warm sun grade`);
+    sh.uniforms.gD = { value: gD }; sh.uniforms.gN = { value: gN }; sh.uniforms.gW = { value: gW }; sh.uniforms.detailMap = { value: detail };
+    sh.uniforms.uNear = tm.userData.uNear; sh.uniforms.uHalf = { value: HALFW };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWp;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWp = (modelMatrix * vec4(position, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+      uniform sampler2D gD; uniform sampler2D gN; uniform sampler2D gW; uniform sampler2D detailMap; uniform float uHalf; uniform vec3 uNear; varying vec3 vWp;
+      vec4 atlasSample(sampler2D t, vec2 wuv, float layer) {                         // one 2x2 atlas tile, wrapped by hand so mips never bleed into neighbours
+        vec2 f = fract(wuv); vec2 dx = dFdx(wuv), dy = dFdy(wuv);
+        vec2 off = vec2(mod(layer, 2.0), floor(layer / 2.0)) * 0.5;
+        vec2 uv = off + 0.0025 + f * 0.495;
+        return textureGrad(t, uv, dx * 0.495, dy * 0.495);
+      }`)
+      .replace('#include <map_fragment>', `
+      vec2 wuvMap = (vWp.xz + uHalf) / (2.0 * uHalf);
+      vec4 sampledDiffuseColor = texture2D(map, vec2(wuvMap.x, 1.0 - wuvMap.y));
+      vec4 w = texture2D(gW, vec2(wuvMap.x, 1.0 - wuvMap.y));
+      float camD = length(vWp - cameraPosition);
+      float nearK = 1.0 - smoothstep(180.0, 900.0, camD);                              // ground detail fades into the plain aerial colour far away
+      vec2 uvA = vWp.xz / 7.0, uvB = vWp.xz / 41.0 + 0.37;                              // fine and broad scales break up visible tiling
+      vec3 gcol = vec3(0.0);
+      gcol += w.r * (atlasSample(gD, uvA, 0.0).rgb * 0.65 + atlasSample(gD, uvB, 0.0).rgb * 0.35);
+      gcol += w.g * (atlasSample(gD, uvA, 1.0).rgb * 0.65 + atlasSample(gD, uvB, 1.0).rgb * 0.35);
+      gcol += w.b * (atlasSample(gD, uvA * 0.8, 2.0).rgb * 0.65 + atlasSample(gD, uvB, 2.0).rgb * 0.35);
+      gcol += w.a * (atlasSample(gD, uvA, 3.0).rgb * 0.65 + atlasSample(gD, uvB, 3.0).rgb * 0.35);
+      vec3 aer = sampledDiffuseColor.rgb;                                              // the real map keeps control of hue and brightness
+      float aL = dot(aer, vec3(0.299, 0.587, 0.114));
+      aer = mix(vec3(aL), aer, 0.9);
+      float gL = max(dot(gcol, vec3(0.299, 0.587, 0.114)), 0.02);
+      vec3 detailed = aer * (gcol / gL) * 0.5 + aer * (gL / 0.22) * 0.5;                // aerial hue, ground-texture grain and contrast
+      detailed = mix(aer, detailed, 0.92);
+      diffuseColor.rgb = mix(aer, detailed, nearK) * vec3(1.02, 1.0, 0.95);
+      diffuseColor.rgb = mix(diffuseColor.rgb, aer * (0.82 + 0.36 * texture2D(detailMap, vWp.xz * 0.011).r), (1.0 - nearK) * 0.6);`)
+      // normal map: the surface normal is geometric, tangents follow world X / Z, so build the TBN from the view matrix
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      {
+        float lay = floor(w.g * 1.0 + w.b * 2.0 + w.a * 3.0 + 0.5);
+        vec3 tn = atlasSample(gN, uvA, lay).rgb * 2.0 - 1.0;
+        tn.xy *= 1.1 * nearK;
+        vec3 Tw = normalize((viewMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xyz);
+        vec3 Bw = normalize((viewMatrix * vec4(0.0, 0.0, 1.0, 0.0)).xyz);
+        normal = normalize(normal + Tw * tn.x - Bw * tn.y);
+      }`);
   };
-  terrain = new THREE.Mesh(geo, tm); scene.add(terrain);
+  tm.userData.uNear = { value: new THREE.Vector3() };
+
+  const geo = new THREE.PlaneGeometry(HALFW * 2, HALFW * 2, Q.seg, Q.seg); geo.rotateX(-Math.PI / 2);
+  const p = geo.attributes.position; for (let i = 0; i < p.count; i++) p.setY(i, hAt(p.getX(i), p.getZ(i)) - 4); geo.computeVertexNormals();
+  terrain = new THREE.Mesh(geo, tm); terrain.frustumCulled = false; scene.add(terrain);
+  buildFineTerrain(tm);
   const sea = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000).rotateX(-Math.PI / 2), seaMat); sea.position.y = -1; scene.add(sea);
 
   await loadProps(); buildChunks(TR, BD, BR); buildRoads(ROADS); buildStreetProps(SP, SPT); buildBirds(BR);
@@ -547,6 +624,7 @@ function frame() {
   rig.position.copy(player.pos); rig.rotation.y = player.yaw; animateRig(dt);
   updateCamera(dt);
   sun.position.set(player.pos.x + 900, 1400, player.pos.z + 500); sun.target.position.copy(player.pos);
+  updateFineTerrain(camera.position.x, camera.position.z); terrain.material.userData.uNear.value.copy(camera.position);
   updateChunks(); updateBirds(performance.now() / 1000, dt);
   renderer.render(scene, camera);
   frames++; fpsT += dt; if (fpsT >= 1) { const fps = frames / fpsT; if (fps < 24) slow++; else slow = Math.max(0, slow - 1); if (slow >= 4 && tierKey !== 'lite') { const o = ['lite', 'medium', 'high']; localStorage.setItem('gtar_tier', o[Math.max(0, o.indexOf(tierKey) - 1)]); location.reload(); } frames = 0; fpsT = 0; }
