@@ -43,3 +43,16 @@ wrap.addEventListener('pointermove', e => { if (!drag) return; tx = drag[2] + e.
 wrap.addEventListener('pointerup', () => { drag = null; wrap.style.cursor = 'grab'; });
 wrap.addEventListener('wheel', e => { e.preventDefault(); const z = Math.min(2.5, Math.max(0.2, sc * (e.deltaY < 0 ? 1.15 : 1 / 1.15))); tx = e.clientX - (e.clientX - tx) * z / sc; ty = e.clientY - (e.clientY - ty) * z / sc; sc = z; apply(); }, { passive: false });
 apply();
+
+// density overlay so the flat map also shows the generated detail (trees, buildings, birds)
+Promise.all(['trees', 'buildings', 'birds'].map(k => fetch(`assets/${k}.bin`).then(r => r.arrayBuffer()))).then(([tb, bb, rb]) => {
+  const TR = new Float32Array(tb), BD = new Float32Array(bb), BR = new Float32Array(rb);
+  const c = document.createElement('canvas'); c.width = c.height = SZ; c.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none';
+  const x = c.getContext('2d');
+  const tcol = ['#1f6b3a', '#3f8f3a', '#3aa65a', '#7aa05a'];
+  for (let i = 0; i < TR.length; i += 4) { x.fillStyle = tcol[TR[i + 3]]; x.fillRect(TR[i] * K - 1, (MAP - TR[i + 1]) * K - 1, 2, 2); }
+  for (let i = 0; i < BD.length; i += 7) { const kd = BD[i + 6]; x.fillStyle = kd === 0 ? '#e8f0ff' : kd === 1 ? '#d9c9b0' : kd === 3 ? '#9aa3ab' : '#f3e3c8'; const s = kd === 0 ? 4 : kd === 1 ? 3 : 2; x.fillRect(BD[i] * K - s / 2, (MAP - BD[i + 1]) * K - s / 2, s, s); }
+  x.fillStyle = '#fff'; for (let i = 0; i < BR.length; i += 3) { x.beginPath(); x.arc(BR[i] * K, (MAP - BR[i + 1]) * K, 5, 0, 6.28); x.fill(); }
+  stage.insertBefore(c, stage.children[1]);
+  window.__flatLayers = { trees: TR.length / 4, buildings: BD.length / 7, birds: BR.length / 3 };
+});
