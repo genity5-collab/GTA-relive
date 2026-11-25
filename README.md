@@ -13,7 +13,14 @@ Play it: https://genity5-collab.github.io/GTA-relive/
 - Day, sunset and night
 
 ## Controls
-Drag to orbit, right-drag to pan, wheel to zoom. 1 whole state, 2 Los Santos, 3 San Fierro, 4 Las Venturas. T time of day, L labels, H terrain height, R rotate, Q graphics quality (Lite, Medium, High).
+There is no on-screen UI. Click the game to capture the mouse.
+
+- **W A S D** move, **Shift** sprint, **Space** jump, **mouse** look, **wheel** camera distance
+- **T** time of day (day, sunset, night), **Q** graphics quality (Lite, Medium, High)
+- Touch: drag on the left half to move (push far to sprint), drag on the right half to look, tap the right half to jump
+
+## Movement
+Acceleration and friction, gravity, slopes that slow you down (and cliffs you cannot climb), solid buildings you slide along, roofs you can land on, and swimming in the sea.
 
 It starts in Lite and lowers its own quality if the frame rate drops. It needs WebGL.
 

@@ -1,7 +1,6 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const V = '1795616865';
+const V = '1795619771';
 const S = 6, HALFW = 3000;
 const mx2x = mx => mx * S - HALFW, my2z = my => HALFW - my * S;
 
@@ -26,9 +25,6 @@ renderer.shadowMap.enabled = false;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 3, 22000);
-const controls = new OrbitControls(camera, canvas);
-controls.enableDamping = true; controls.dampingFactor = 0.08;
-controls.maxPolarAngle = Math.PI / 2 - 0.04; controls.minDistance = 25; controls.maxDistance = 8500;
 
 // ================= SKY / LIGHT =================
 const skies = {
@@ -55,7 +51,6 @@ function applyTime(m) {
   const a = m === 'sunset' ? 0.22 : m === 'night' ? 0.7 : 0.95;
   sun.position.set(Math.cos(a) * 7000, Math.sin(a) * 7000, 3200);
   if (window.__bMat) window.__bMat.emissiveIntensity = m === 'night' ? 1 : m === 'sunset' ? 0.25 : 0;
-  renderInfo();
 }
 
 // ================= DATA / TERRAIN =================
@@ -254,16 +249,12 @@ function updateBirds(t, dt) {
   birds.instanceMatrix.needsUpdate = true;
 }
 
-// ================= LABELS =================
-const tags = [], tagLayer = document.getElementById('tags');
-function addTag(text, color, wx, wz, lift) { const el = document.createElement('div'); el.className = 'tag'; el.textContent = text; el.style.color = color; tagLayer.appendChild(el); tags.push({ el, p: new THREE.Vector3(wx, Math.max(hAt(wx, wz), 0) + lift, wz) }); }
-const districts = [['Los Santos', 800, 255, 900], ['San Fierro', 165, 500, 900], ['Las Venturas', 835, 715, 900], ['Mount Chiliad', 395, 835, 800], ['Bone County', 300, 905, 1400], ['Red County', 790, 420, 1400], ['Flint County', 285, 305, 1400], ['Tierra Robada', 120, 740, 1400]];
+const districts = [['Los Santos', 800, 255, 900], ['San Fierro', 165, 500, 900], ['Las Venturas', 835, 715, 900]];
 
 // ================= MAIN =================
 async function main() {
-  const [aerial, detail, hImg, airports, buildings, homes, schools, TR, BD, BR, ROADS] = await Promise.all([
+  const [aerial, detail, hImg, TR, BD, BR, ROADS] = await Promise.all([
     loadTex('assets/sa_aerial_2k.jpg?v=' + V), loadTex('assets/detail.jpg?v=' + V), loadImg('assets/sa_height.png?v=' + V),
-    loadJSON('assets/airports.json'), loadJSON('assets/buildings.json'), loadJSON('assets/homes.json'), loadJSON('assets/schools.json'),
     loadBin('trees'), loadBin('buildings'), loadBin('birds'), loadJSON('assets/roads.json?v=' + V),
   ]);
   aerial.colorSpace = THREE.SRGBColorSpace; aerial.anisotropy = 4; detail.wrapS = detail.wrapT = THREE.RepeatWrapping; detail.colorSpace = THREE.SRGBColorSpace;
@@ -287,60 +278,200 @@ async function main() {
   terrain = new THREE.Mesh(geo, tm); scene.add(terrain);
   const sea = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000).rotateX(-Math.PI / 2), seaMat); sea.position.y = -1; scene.add(sea);
 
-  // labels & pins (cheap): only real named POIs
-  const legend = document.getElementById('legend'); legend.innerHTML = '<b>Regions</b> <small>(click to fly)</small>';
-  districts.forEach(d => { const el = document.createElement('div'); el.textContent = d[0]; el.onclick = () => flyTo(mx2x(d[1]), my2z(d[2]), d[3]); legend.appendChild(el); addTag(d[0].toUpperCase(), '#ffe27a', mx2x(d[1]), my2z(d[2]), 240); });
-  const pt = f => f.geometry.type === 'Point' ? f.geometry.coordinates : f.geometry.coordinates[0].reduce((a, q) => [a[0] + q[0] / f.geometry.coordinates[0].length, a[1] + q[1] / f.geometry.coordinates[0].length], [0, 0]);
-  const seen = new Set();
-  [[airports, '#8fd6ff'], [buildings, '#ffb0b0'], [schools, '#ffd2a0'], [homes, '#b6ffb0']].forEach(([data, tcol], gi) => data.forEach(f => {
-    const [mx, my] = pt(f), name = f.properties.name || ''; const key = name + Math.round(mx / 20) + Math.round(my / 20); if (seen.has(key)) return; seen.add(key);
-    if (name && name !== 'Safehouse') addTag(name, tcol, mx2x(mx), my2z(my), 70);
-  }));
-
   buildChunks(TR, BD, BR); buildRoads(ROADS); buildBirds(BR);
-  const stats = { chunks: chunks.length, trees: TR.length / 4, buildings: BD.length / 7 }; window.__stats = stats;
-  document.getElementById('load').remove(); applyTime('day');
-  camera.position.set(-1500, 2300, 3600); controls.target.set(0, 0, 0); presets['1'](); updateChunks(); frame();
+  window.__stats = { chunks: chunks.length, trees: TR.length / 4, buildings: BD.length / 7 };
+  buildCollision(BD); initPlayer(); document.getElementById('load').remove(); applyTime('day'); updateChunks(); frame();
 }
 
-// ================= CAMERA =================
-let anim = null, autoRot = false, labelsOn = true, dirty = true;
-function flyTo(tx, tz, dist, hh) { const ty = Math.max(hAt(tx, tz), 0); anim = { t: 0, fp: camera.position.clone(), ft: controls.target.clone(), tp: new THREE.Vector3(tx - dist * 0.25, ty + (hh ?? dist * 0.6), tz + dist * 0.85), tt: new THREE.Vector3(tx, ty, tz) }; autoRot = false; dirty = true; }
-const presets = { '1': () => flyTo(0, 0, 6200, 4200), '2': () => flyTo(mx2x(800), my2z(255), 700), '3': () => flyTo(mx2x(165), my2z(500), 700), '4': () => flyTo(mx2x(835), my2z(715), 700) };
-addEventListener('keydown', e => {
-  const k = e.key.toLowerCase(); dirty = true;
-  if (presets[k]) presets[k]();
-  if (k === 't') applyTime({ day: 'sunset', sunset: 'night', night: 'day' }[mode]);
-  if (k === 'r') autoRot = !autoRot;
-  if (k === 'l') { labelsOn = !labelsOn; tagLayer.style.display = labelsOn ? '' : 'none'; }
-  if (k === 'q') { const o = ['lite', 'medium', 'high']; localStorage.setItem('gtar_tier', o[(o.indexOf(tierKey) + 1) % 3]); location.reload(); }
-});
-controls.addEventListener('change', () => { dirty = true; });
-const infoEl = document.getElementById('info');
-const regionAt = (x, z) => { const mx = (x + HALFW) / S, my = (HALFW - z) / S; let best = null, bd = 1e9; for (const d of districts.slice(0, 3)) { const dd = Math.hypot(mx - d[1], my - d[2]); if (dd < bd) { bd = dd; best = d[0]; } } return bd < 130 ? best : (mx < 0 || mx > 1000 || my < 0 || my > 1000 ? 'Open sea' : 'Countryside'); };
-let lastInfo = '';
-function renderInfo() { const s = regionAt(controls.target.x, controls.target.z) + ' | ' + ({ day: 'Day', sunset: 'Sunset', night: 'Night' })[mode] + ' | ' + Q.name + ' (Q to change)' + (fpsShown ? ' | ' + fpsShown + ' fps' : ''); if (s !== lastInfo) { infoEl.textContent = s; lastInfo = s; } }
+// ================= COLLISION: oriented building footprints in a spatial grid =================
+const CG = 40; const cgrid = new Map(); let BLD = null;
+function buildCollision(BD) {
+  BLD = BD;
+  for (let i = 0; i < BD.length; i += 7) {
+    const wx = mx2x(BD[i]), wz = my2z(BD[i + 1]), r = Math.hypot(BD[i + 2], BD[i + 3]) / 2;
+    for (let gx = Math.floor((wx - r) / CG); gx <= Math.floor((wx + r) / CG); gx++)
+      for (let gz = Math.floor((wz - r) / CG); gz <= Math.floor((wz + r) / CG); gz++) { const k = gx * 73856093 ^ gz * 19349663; let a = cgrid.get(k); if (!a) cgrid.set(k, a = []); a.push(i); }
+  }
+}
+// push a circle (player) out of every box it overlaps; boxes are rotated by BD rot about +Y (three.js convention)
+function resolveBuildings(p, rad) {
+  const k = Math.floor(p.x / CG) * 73856093 ^ Math.floor(p.z / CG) * 19349663; const list = cgrid.get(k); if (!list) return null;
+  let roofY = null;
+  for (const i of list) {
+    const cx = mx2x(BLD[i]), cz = my2z(BLD[i + 1]), hw = BLD[i + 2] / 2, hd = BLD[i + 3] / 2, h = BLD[i + 4], rot = BLD[i + 5];
+    const ext = Math.max(hw, hd); const lo = Math.min(hAt(cx, cz), hAt(cx + ext, cz), hAt(cx - ext, cz), hAt(cx, cz + ext), hAt(cx, cz - ext));
+    const base = Math.max(lo, 0) - 1, top = Math.max(hAt(cx, cz), 0) + h;
+    const c = Math.cos(rot), s = Math.sin(rot), dx = p.x - cx, dz = p.z - cz;
+    // world -> box local. three.js Y rotation maps local (lx,lz) to world (lx*c + lz*s, -lx*s + lz*c), so the inverse is:
+    const lx = dx * c - dz * s, lz = dx * s + dz * c;
+    if (Math.abs(lx) > hw + rad || Math.abs(lz) > hd + rad) continue;
+    if (p.y >= top - 0.6) { if (Math.abs(lx) <= hw + rad * 0.5 && Math.abs(lz) <= hd + rad * 0.5) roofY = Math.max(roofY ?? -1e9, top); continue; }
+    if (p.y + 1.8 < base) continue;
+    let nlx, nlz, push;
+    const qx = Math.max(-hw, Math.min(hw, lx)), qz = Math.max(-hd, Math.min(hd, lz));
+    const ox = lx - qx, oz = lz - qz, d = Math.hypot(ox, oz);
+    if (d > 1e-6) { if (d >= rad) continue; nlx = ox / d; nlz = oz / d; push = rad - d; }
+    else { const px = hw - Math.abs(lx), pz = hd - Math.abs(lz);                     // centre is inside the box: exit via nearest face
+      if (px < pz) { nlx = Math.sign(lx) || 1; nlz = 0; push = px + rad; } else { nlx = 0; nlz = Math.sign(lz) || 1; push = pz + rad; } }
+    const nx = nlx * c + nlz * s, nz = -nlx * s + nlz * c;                            // local normal -> world
+    p.x += nx * push; p.z += nz * push;
+    const vn = player.vel.x * nx + player.vel.z * nz; if (vn < 0) { player.vel.x -= vn * nx; player.vel.z -= vn * nz; }   // slide along the wall
+  }
+  return roofY;
+}
 
-// ================= LOOP: adaptive quality, idle = no GPU work, hidden tab = paused =================
-const v = new THREE.Vector3(), clock = new THREE.Clock(); let fpsShown = 0, frames = 0, fpsT = 0, slow = 0, lastDraw = 0, idleFrames = 0;
+// ================= CHARACTER: articulated low-poly person =================
+const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, onGround: false, swimming: false, phase: 0, speed: 0 };
+let rig;
+function limb(w, h, d, col, pivotTop = true) {
+  const g = new THREE.BoxGeometry(w, h, d); if (pivotTop) g.translate(0, -h / 2, 0);
+  const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: col })); return m;
+}
+function initPlayer() {
+  rig = new THREE.Group();
+  const skin = 0x9a6a4b, shirt = 0x2f5d3a, jeans = 0x2b3a55, shoe = 0x1b1b1b, hair = 0x161210;
+  const hips = new THREE.Group(); hips.position.y = 0.95; rig.add(hips);
+  const torso = limb(0.46, 0.62, 0.26, shirt, false); torso.position.y = 0.33; hips.add(torso);
+  const neck = new THREE.Group(); neck.position.y = 0.68; hips.add(neck);
+  const head = limb(0.24, 0.27, 0.25, skin, false); head.position.y = 0.15; neck.add(head);
+  const hairM = limb(0.26, 0.09, 0.27, hair, false); hairM.position.y = 0.3; neck.add(hairM);
+  const mk = (x, y, w, h, col, lowCol) => { const up = new THREE.Group(); up.position.set(x, y, 0); const a = limb(w, h, w, col); up.add(a); const kn = new THREE.Group(); kn.position.y = -h; up.add(kn); const b = limb(w * 0.9, h, w * 0.9, lowCol); kn.add(b); return { up, kn }; };
+  const armL = mk(-0.3, 0.6, 0.13, 0.33, shirt, skin), armR = mk(0.3, 0.6, 0.13, 0.33, shirt, skin);
+  const legL = mk(-0.12, 0.02, 0.17, 0.46, jeans, jeans), legR = mk(0.12, 0.02, 0.17, 0.46, jeans, jeans);
+  [armL, armR, legL, legR].forEach(l => hips.add(l.up));
+  [legL, legR].forEach(l => { const f = limb(0.17, 0.08, 0.3, shoe, false); f.position.set(0, -0.48, 0.06); l.kn.add(f); });
+  rig.userData = { hips, torso, neck, armL, armR, legL, legR };
+  scene.add(rig);
+  // spawn on a real Los Santos street
+  player.pos.set(mx2x(801.4), 0, my2z(250.7)); player.pos.y = groundAt(player.pos.x, player.pos.z);
+  camYaw = Math.PI; camPitch = 0.28;
+}
+function groundAt(x, z) { return Math.max(hAt(x, z), 0); }
+const WATER_Y = -1, SEA_H = 0.6;       // terrain at or below SEA_H is open water
+
+// walk/run/jump/swim animation driven by real speed
+function animateRig(dt) {
+  const u = rig.userData, sp = player.speed, run = Math.min(1, sp / 9);
+  player.phase += dt * (sp > 0.3 ? 4 + sp * 0.9 : 0);
+  const sw = Math.sin(player.phase), sw2 = Math.sin(player.phase + Math.PI), amp = Math.min(1, sp / 3) * (0.55 + 0.45 * run);
+  const t = performance.now() / 1000;
+  if (player.swimming) {
+    u.legL.up.rotation.x = Math.sin(t * 6) * 0.4; u.legR.up.rotation.x = -Math.sin(t * 6) * 0.4;
+    u.armL.up.rotation.x = -2.4 + Math.sin(t * 3) * 0.9; u.armR.up.rotation.x = -2.4 - Math.sin(t * 3) * 0.9;
+    u.hips.rotation.x = 1.25; u.hips.position.y = 0.55; return;
+  }
+  u.hips.rotation.x = run * 0.18;
+  if (!player.onGround) {                                    // airborne pose
+    u.legL.up.rotation.x = -0.6; u.legL.kn.rotation.x = 0.9; u.legR.up.rotation.x = 0.2; u.legR.kn.rotation.x = 0.4;
+    u.armL.up.rotation.x = -0.4; u.armR.up.rotation.x = -0.4; u.armL.up.rotation.z = 0.5; u.armR.up.rotation.z = -0.5; return;
+  }
+  u.armL.up.rotation.z = 0.06; u.armR.up.rotation.z = -0.06;
+  u.legL.up.rotation.x = sw * 0.85 * amp; u.legR.up.rotation.x = sw2 * 0.85 * amp;
+  u.legL.kn.rotation.x = Math.max(0, -Math.cos(player.phase)) * 1.3 * amp; u.legR.kn.rotation.x = Math.max(0, Math.cos(player.phase)) * 1.3 * amp;
+  u.armL.up.rotation.x = sw2 * 0.7 * amp; u.armR.up.rotation.x = sw * 0.7 * amp;
+  u.armL.kn.rotation.x = -0.25 - run * 1.1; u.armR.kn.rotation.x = -0.25 - run * 1.1;
+  const breathe = sp < 0.3 ? Math.sin(t * 1.8) * 0.012 : 0;
+  u.hips.position.y = 0.95 + Math.abs(Math.cos(player.phase)) * 0.06 * amp - 0.03 * amp + breathe;
+  u.torso.scale.set(1, 1 + breathe, 1);
+}
+
+// ================= INPUT: keyboard + mouse look (pointer lock) + invisible touch zones, no UI =================
+const keys = {}; let camYaw = 0, camPitch = 0.3, camDist = 6.5, lookDX = 0, lookDY = 0, touchMove = { x: 0, y: 0 }, wantJump = false;
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'Space') { wantJump = true; e.preventDefault(); }
+  if (e.code === 'KeyT') applyTime({ day: 'sunset', sunset: 'night', night: 'day' }[mode]);
+  if (e.code === 'KeyQ') { const o = ['lite', 'medium', 'high']; localStorage.setItem('gtar_tier', o[(o.indexOf(tierKey) + 1) % 3]); location.reload(); } });
+addEventListener('keyup', e => { keys[e.code] = false; });
+canvas.addEventListener('click', () => { if (!('ontouchstart' in window) && document.pointerLockElement !== canvas) canvas.requestPointerLock?.(); });
+addEventListener('mousemove', e => { if (document.pointerLockElement === canvas) { lookDX += e.movementX; lookDY += e.movementY; } });
+addEventListener('wheel', e => { camDist = Math.min(14, Math.max(2.5, camDist + Math.sign(e.deltaY) * 0.8)); }, { passive: true });
+const touches = new Map();
+canvas.addEventListener('touchstart', e => { for (const t of e.changedTouches) touches.set(t.identifier, { sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY, left: t.clientX < innerWidth / 2, t0: performance.now() }); e.preventDefault(); }, { passive: false });
+canvas.addEventListener('touchmove', e => { for (const t of e.changedTouches) { const o = touches.get(t.identifier); if (!o) continue;
+  if (o.left) { touchMove.x = Math.max(-1, Math.min(1, (t.clientX - o.sx) / 60)); touchMove.y = Math.max(-1, Math.min(1, (t.clientY - o.sy) / 60)); }
+  else { lookDX += (t.clientX - o.x) * 2.2; lookDY += (t.clientY - o.y) * 2.2; } o.x = t.clientX; o.y = t.clientY; } e.preventDefault(); }, { passive: false });
+canvas.addEventListener('touchend', e => { for (const t of e.changedTouches) { const o = touches.get(t.identifier); if (!o) continue;
+  if (o.left) touchMove.x = touchMove.y = 0; else if (performance.now() - o.t0 < 220 && Math.hypot(t.clientX - o.sx, t.clientY - o.sy) < 12) wantJump = true;   // quick tap on right side = jump
+  touches.delete(t.identifier); } }, { passive: false });
+
+// ================= PHYSICS: accel/friction, gravity, slopes, jumping, swimming, building collision =================
+const G = 24, WALK = 4.2, RUN = 9.5, ACC_G = 34, ACC_AIR = 6, FRICTION = 10, JUMP = 7.2, STEP = 0.55, MAX_SLOPE = 0.9, RAD = 0.35;
+function stepPhysics(dt) {
+  // desired direction relative to camera yaw
+  let ix = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0) + touchMove.x;
+  let iz = (keys.KeyS || keys.ArrowDown ? 1 : 0) - (keys.KeyW || keys.ArrowUp ? 1 : 0) + touchMove.y;
+  const il = Math.hypot(ix, iz); if (il > 1) { ix /= il; iz /= il; }
+  const sprint = keys.ShiftLeft || keys.ShiftRight || Math.hypot(touchMove.x, touchMove.y) > 0.92;
+  const sinY = Math.sin(camYaw), cosY = Math.cos(camYaw);
+  const wx = ix * cosY + iz * sinY, wz = -ix * sinY + iz * cosY;           // camera-relative -> world
+  const ground = hAt(player.pos.x, player.pos.z);
+  player.swimming = ground <= SEA_H && player.pos.y <= 0.6;
+  const target = player.swimming ? 2.6 * (sprint ? 1.5 : 1) : (sprint ? RUN : WALK);
+  // slope: compute terrain gradient, slow down when walking uphill, block steep climbs
+  const e = 1.5, gx = (hAt(player.pos.x + e, player.pos.z) - hAt(player.pos.x - e, player.pos.z)) / (2 * e), gz = (hAt(player.pos.x, player.pos.z + e) - hAt(player.pos.x, player.pos.z - e)) / (2 * e);
+  let uphill = (wx * gx + wz * gz); let slopeMul = player.onGround ? Math.max(0.25, 1 - Math.max(0, uphill) * 0.9) : 1;
+  if (player.onGround && uphill > MAX_SLOPE * 1.6) slopeMul = 0;
+  const acc = player.onGround || player.swimming ? ACC_G : ACC_AIR;
+  const tvx = wx * target * slopeMul, tvz = wz * target * slopeMul;
+  const k = 1 - Math.exp(-acc * dt / Math.max(1, target));
+  if (il > 0.05) { player.vel.x += (tvx - player.vel.x) * Math.min(1, k * 3); player.vel.z += (tvz - player.vel.z) * Math.min(1, k * 3); }
+  else if (player.onGround || player.swimming) { const f = Math.exp(-FRICTION * dt); player.vel.x *= f; player.vel.z *= f; }
+  // jump / gravity / buoyancy
+  if (wantJump && player.onGround) { player.vel.y = JUMP; player.onGround = false; }
+  wantJump = false;
+  if (player.swimming) { player.vel.y += ((WATER_Y - 0.8) - player.pos.y) * 6 * dt; player.vel.y *= Math.exp(-3 * dt); }
+  else player.vel.y -= G * dt;
+  // integrate horizontally in small substeps for stable wall sliding
+  const steps = Math.ceil(Math.hypot(player.vel.x, player.vel.z) * dt / 0.25) || 1;
+  let roof = null;
+  for (let s = 0; s < steps; s++) {
+    const ox = player.pos.x, oz = player.pos.z, oyG = Math.max(hAt(ox, oz), -1e9);
+    player.pos.x += player.vel.x * dt / steps; player.pos.z += player.vel.z * dt / steps;
+    // step limit: can't walk up a sudden cliff (> STEP + slope allowance)
+    const ng = hAt(player.pos.x, player.pos.z);
+    if (player.onGround && ng - player.pos.y > STEP + 0.6) { player.pos.x = ox; player.pos.z = oz; player.vel.x *= 0.2; player.vel.z *= 0.2; }
+    const r = resolveBuildings(player.pos, RAD); if (r !== null) roof = r;
+  }
+  // keep inside the state
+  player.pos.x = Math.max(-HALFW - 400, Math.min(HALFW + 400, player.pos.x)); player.pos.z = Math.max(-HALFW - 400, Math.min(HALFW + 400, player.pos.z));
+  player.pos.y += player.vel.y * dt;
+  const floor = Math.max(hAt(player.pos.x, player.pos.z), roof ?? -1e9);
+  if (!player.swimming && player.pos.y <= floor) { player.pos.y = floor; player.vel.y = 0; player.onGround = true; }
+  else if (!player.swimming && player.onGround && player.pos.y - floor < 0.6 && player.vel.y <= 0) { player.pos.y = floor; player.vel.y = 0; }     // stick to ground going downhill
+  else player.onGround = false;
+  if (player.swimming) player.onGround = false;
+  player.speed = Math.hypot(player.vel.x, player.vel.z);
+  // face movement direction smoothly
+  if (player.speed > 0.4) { const want = Math.atan2(player.vel.x, player.vel.z); let d = want - player.yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); player.yaw += d * Math.min(1, dt * 12); }
+}
+
+// ================= THIRD-PERSON CAMERA: smooth follow, collision with terrain, sprint FOV kick, head bob =================
+const camPos = new THREE.Vector3(), camLook = new THREE.Vector3();
+function updateCamera(dt) {
+  camYaw -= lookDX * 0.0024; camPitch = Math.max(-0.35, Math.min(1.2, camPitch + lookDY * 0.0022)); lookDX = lookDY = 0;
+  const head = new THREE.Vector3(player.pos.x, player.pos.y + 1.6, player.pos.z);
+  const bob = player.onGround ? Math.sin(player.phase * 2) * Math.min(0.05, player.speed * 0.006) : 0;
+  const want = new THREE.Vector3(head.x + Math.sin(camYaw) * Math.cos(camPitch) * camDist, head.y + Math.sin(camPitch) * camDist + bob, head.z + Math.cos(camYaw) * Math.cos(camPitch) * camDist);
+  // pull the camera in if terrain blocks the view
+  for (let i = 1; i <= 6; i++) { const t = i / 6, x = head.x + (want.x - head.x) * t, z = head.z + (want.z - head.z) * t, y = head.y + (want.y - head.y) * t; if (y < hAt(x, z) + 0.4) { want.lerpVectors(head, want, Math.max(0.15, t - 0.17)); want.y = Math.max(want.y, hAt(want.x, want.z) + 0.5); break; } }
+  const k = 1 - Math.exp(-dt * 14); camPos.lerp(want, camPos.lengthSq() ? k : 1); camLook.lerp(head, camLook.lengthSq() ? k : 1);
+  camera.position.copy(camPos); camera.lookAt(camLook);
+  const fov = 62 + Math.min(1, Math.max(0, (player.speed - WALK) / (RUN - WALK))) * 9; if (Math.abs(camera.fov - fov) > 0.05) { camera.fov += (fov - camera.fov) * Math.min(1, dt * 5); camera.updateProjectionMatrix(); }
+}
+
+// ================= LOOP: fixed-step physics, adaptive quality, paused when hidden =================
+const clock = new THREE.Clock(); let acc = 0, frames = 0, fpsT = 0, slow = 0;
+camera.near = 0.15; camera.far = 22000; camera.fov = 62; camera.updateProjectionMatrix();
 function frame() {
   requestAnimationFrame(frame);
   if (document.hidden) { clock.getDelta(); return; }
   const dt = Math.min(clock.getDelta(), 0.1);
-  let moving = false;
-  if (anim) { anim.t = Math.min(1, anim.t + dt * 0.55); const k = 1 - Math.pow(1 - anim.t, 3); camera.position.lerpVectors(anim.fp, anim.tp, k); controls.target.lerpVectors(anim.ft, anim.tt, k); if (anim.t >= 1) anim = null; moving = true; }
-  if (autoRot) { const o = camera.position.clone().sub(controls.target); o.applyAxisAngle(new THREE.Vector3(0, 1, 0), dt * 0.1); camera.position.copy(controls.target).add(o); moving = true; }
-  const upd = controls.update(); if (upd) moving = true;
-  const hasBirds = birds && !!flock.length;
-  // render only if something changed (or birds need to animate near the camera); otherwise sleep the GPU
-  if (!(dirty || moving || hasBirds)) { idleFrames++; return; }
-  const now = performance.now(); if (!moving && !dirty && now - lastDraw < 1000 / 24) return;      // idle + birds: 24 fps cap
-  lastDraw = now; dirty = false;
-  const gh = Math.max(hAt(camera.position.x, camera.position.z), 0) + 20; if (camera.position.y < gh) camera.position.y = gh;
-  updateChunks(); updateBirds(now / 1000, dt);
-  if (labelsOn) for (const t of tags) { v.copy(t.p).project(camera); const vis = v.z < 1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05 && camera.position.distanceTo(t.p) < 7500; if (vis !== t.on) { t.el.style.display = vis ? '' : 'none'; t.on = vis; } if (vis) t.el.style.transform = 'translate(' + ((v.x + 1) / 2 * innerWidth) + 'px,' + ((1 - v.y) / 2 * innerHeight) + 'px) translate(-50%,-100%)'; }
+  acc += dt; const H = 1 / 120; let n = 0; while (acc >= H && n < 24) { stepPhysics(H); acc -= H; n++; } if (n >= 24) acc = 0;
+  rig.position.copy(player.pos); rig.rotation.y = player.yaw; animateRig(dt);
+  updateCamera(dt);
+  sun.position.set(player.pos.x + 900, 1400, player.pos.z + 500); sun.target.position.copy(player.pos);
+  updateChunks(); updateBirds(performance.now() / 1000, dt);
   renderer.render(scene, camera);
-  frames++; fpsT += dt; if (fpsT >= 1) { fpsShown = Math.round(frames / fpsT); if (moving) { if (fpsShown < 24) slow++; else slow = Math.max(0, slow - 1); if (slow >= 3 && tierKey !== 'lite') { const o = ['lite', 'medium', 'high']; localStorage.setItem('gtar_tier', o[Math.max(0, o.indexOf(tierKey) - 1)]); location.reload(); } } frames = 0; fpsT = 0; renderInfo(); }
+  frames++; fpsT += dt; if (fpsT >= 1) { const fps = frames / fpsT; if (fps < 24) slow++; else slow = Math.max(0, slow - 1); if (slow >= 4 && tierKey !== 'lite') { const o = ['lite', 'medium', 'high']; localStorage.setItem('gtar_tier', o[Math.max(0, o.indexOf(tierKey) - 1)]); location.reload(); } frames = 0; fpsT = 0; }
 }
-addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); dirty = true; });
-main().catch(e => { document.getElementById('load').innerHTML = 'Failed to load: ' + e.message; console.error(e); });
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+main().catch(e => { const l = document.getElementById('load'); if (l) l.innerHTML = 'Failed to load: ' + e.message; console.error(e); });
