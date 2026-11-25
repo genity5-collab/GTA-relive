@@ -5,7 +5,7 @@ const MAP = 1000;
 const wrap = document.createElement('div');
 wrap.style.cssText = 'position:fixed;inset:0;overflow:hidden;background:#1d3b4a;cursor:grab;touch-action:none';
 const stage = document.createElement('div'); stage.style.cssText = 'position:absolute;left:0;top:0;transform-origin:0 0';
-const img = new Image(); img.src = 'assets/sa_aerial.jpg'; img.draggable = false; img.style.cssText = 'display:block;width:2000px;height:2000px;user-select:none';
+const img = new Image(); img.src = 'assets/sa_aerial_2k.jpg'; img.draggable = false; img.style.cssText = 'display:block;width:2000px;height:2000px;user-select:none';
 stage.appendChild(img); wrap.appendChild(stage); document.body.prepend(wrap);
 const SZ = 2000, K = SZ / MAP; // px per map unit
 let sc = Math.min(innerWidth, innerHeight) / SZ, tx = (innerWidth - SZ * sc) / 2, ty = (innerHeight - SZ * sc) / 2;
