@@ -1,14 +1,14 @@
 import * as THREE from 'three';
 
-const V = '1795619771';
+const V = '1795620585';
 const S = 6, HALFW = 3000;
 const mx2x = mx => mx * S - HALFW, my2z = my => HALFW - my * S;
 
 // ================= QUALITY (Lite by default, auto-downgrades if FPS drops) =================
 const TIERS = {
-  lite:   { name: 'Lite',   dpr: 1,    seg: 192, trees: 0.35, bldg: 0.6, birds: 4,  drawDist: 1500, shadows: false },
-  medium: { name: 'Medium', dpr: 1,    seg: 256, trees: 0.7,  bldg: 0.85, birds: 8, drawDist: 2300, shadows: false },
-  high:   { name: 'High',   dpr: Math.min(devicePixelRatio, 1.5), seg: 320, trees: 1, bldg: 1, birds: 12, drawDist: 3200, shadows: true },
+  lite:   { name: 'Lite',   dpr: 1,    seg: 192, trees: 0.35, bldg: 0.6, birds: 4,  drawDist: 1500, detailDist: 260, shadows: false },
+  medium: { name: 'Medium', dpr: 1,    seg: 256, trees: 0.7,  bldg: 0.85, birds: 8, drawDist: 2300, detailDist: 420, shadows: false },
+  high:   { name: 'High',   dpr: Math.min(devicePixelRatio, 1.5), seg: 320, trees: 1, bldg: 1, birds: 12, drawDist: 3200, detailDist: 650, shadows: true },
 };
 let tierKey = localStorage.getItem('gtar_tier') || 'lite';
 if (!TIERS[tierKey]) tierKey = 'lite';
@@ -51,6 +51,7 @@ function applyTime(m) {
   const a = m === 'sunset' ? 0.22 : m === 'night' ? 0.7 : 0.95;
   sun.position.set(Math.cos(a) * 7000, Math.sin(a) * 7000, 3200);
   if (window.__bMat) window.__bMat.emissiveIntensity = m === 'night' ? 1 : m === 'sunset' ? 0.25 : 0;
+  const ei = m === 'night' ? 0.04 : m === 'sunset' ? 0.18 : 0.35; for (const k of ['asph', 'walk']) if (window.__roadMats) window.__roadMats[k].envMapIntensity = ei; seaMat.envMapIntensity = ei * 2;
 }
 
 // ================= DATA / TERRAIN =================
@@ -106,20 +107,54 @@ function windowTex(lit) {
 const bMat = new THREE.MeshLambertMaterial({ map: windowTex(false), emissive: 0xffd890, emissiveMap: windowTex(true), emissiveIntensity: 0 });
 window.__bMat = bMat;
 bMat.onBeforeCompile = sh => {
-  sh.vertexShader = sh.vertexShader.replace('#include <uv_vertex>', `#include <uv_vertex>
+  // real facade detail: Poly Haven plaster (or brick on every 3rd building) multiplied over the window grid, tiled in world units
+  sh.uniforms.facade = { value: T.plaster[0] }; sh.uniforms.facadeB = { value: T.brick[0] };
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vFac; varying float vBrick;').replace('#include <uv_vertex>', `#include <uv_vertex>
     #ifdef USE_INSTANCING
       vec3 isc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
       vec3 nn = abs(normal);
       float horiz = nn.x > 0.5 ? isc.z : isc.x;
       vMapUv = uv * (nn.y > 0.5 ? vec2(1.0) : vec2(max(1.0, floor(horiz / 5.0)) * 0.4, max(1.0, floor(isc.y / 4.0)) / 16.0));
+      vFac = uv * vec2(horiz, isc.y) / 6.0;                        // one facade texture tile per 6 world units
+      vBrick = step(0.66, fract(instanceMatrix[3].x * 0.0137 + instanceMatrix[3].z * 0.0211));
       #ifdef USE_EMISSIVEMAP
         vEmissiveMapUv = vMapUv;
       #endif
+    #else
+      vFac = uv; vBrick = 0.0;
     #endif`);
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D facade; uniform sampler2D facadeB; varying vec2 vFac; varying float vBrick;').replace('#include <map_fragment>', `#include <map_fragment>
+    vec3 fac = mix(texture2D(facade, vFac).rgb * vec3(1.05, 0.97, 0.86), texture2D(facadeB, vFac).rgb * 1.35, vBrick);
+    diffuseColor.rgb *= mix(vec3(1.0), fac * 1.25, 0.85);`);
+};
+// ---- real CC0 PBR textures (Poly Haven), 512px, loaded once and shared ----
+const texLoader = new THREE.TextureLoader();
+function pbrTex(name, rep, srgb = true) { const t = texLoader.load('assets/tex/' + name + '.jpg?v=' + V); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.anisotropy = Q.name === 'Lite' ? 2 : 4; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; }
+const T = {
+  road: [pbrTex('road_d', 1), pbrTex('road_n', 1, false)], walk: [pbrTex('walk_d', 1), pbrTex('walk_n', 1, false)],
+  plaster: [pbrTex('plaster_d', 1), pbrTex('plaster_n', 1, false)], brick: [pbrTex('brick_d', 1), pbrTex('brick_n', 1, false)], roof: [pbrTex('roof_d', 1), pbrTex('roof_n', 1, false)],
 };
 const roofMat = new THREE.MeshLambertMaterial({ color: 0x5b646d });
 const hRoofMat = new THREE.MeshLambertMaterial({ color: 0x9c4a3a });
 const palette = [[0xc4ccd4, 0xa9b6c5, 0xdbe1e7, 0x93a5b8], [0xd8cab3, 0xc6b9a1, 0xe2d7c4, 0xb9aa91], [0xf0e2c9, 0xe6cabf, 0xd3e0c8, 0xe1d6ee, 0xf3d9a8], [0x9ba4ac, 0xaeb4ba, 0x8c9298]];
+
+// ---- CC0 city-kit models (kayquer/kit-cidade-lowpoly), packed by tools/pack_props.py: int16 pos, int8 normal, uint8 colour, uint16 index ----
+const PROPS = {};
+async function loadProps() {
+  const [ix, buf] = await Promise.all([loadJSON('assets/props.json?v=' + V), fetch('assets/props.bin?v=' + V).then(r => r.arrayBuffer())]);
+  for (const name in ix) {
+    const r = ix[name], v = r.v; let o = r.o;
+    const pos = new Float32Array(v * 3), nor = new Float32Array(v * 3), col = new Float32Array(v * 3);
+    const P = new Int16Array(buf, o, v * 3); o += v * 6; const N = new Int8Array(buf, o, v * 3); o += v * 3 + ((-v * 3) % 4 + 4) % 4;
+    const C = new Uint8Array(buf, o, v * 3); o += v * 3 + ((-v * 3) % 4 + 4) % 4; const I = new Uint16Array(buf, o, r.i);
+    for (let k = 0; k < v * 3; k++) { pos[k] = P[k] / 1024; nor[k] = N[k] / 127; col[k] = C[k] / 255; }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nor, 3)); g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.setIndex(new THREE.BufferAttribute(new Uint16Array(I), 1));
+    g.computeBoundingSphere(); PROPS[name] = { geo: g, min: r.min, max: r.max, size: [r.max[0] - r.min[0], r.max[1] - r.min[1], r.max[2] - r.min[2]] };
+  }
+}
+const propMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+// which kit model each building kind may use (picked per building from its index so the street looks varied)
+const KIND_MODELS = { 2: ['casa_simples', 'casa_sobrado', 'casas_geminadas', 'casa_simples'], 3: ['loja_esquina', 'mercado', 'restaurante', 'galpao', 'oficina', 'banco'], 1: ['predio_apartamentos', 'escritorio', 'hotel', 'predio_alto'] };
 
 function buildChunks(TR, BD, brAnchors) {
   const tbuck = new Map(), bbuck = new Map();
@@ -140,7 +175,9 @@ function buildChunks(TR, BD, brAnchors) {
     // buildings
     const bl = bbuck.get(key) || []; const byK = [[], [], [], []]; bl.forEach(o => byK[BD[o + 6]].push(o));
     byK.forEach((list, kd) => {
-      if (!list.length) return; const im = new THREE.InstancedMesh(unit, bMat, list.length); const pal = palette[kd];
+      if (!list.length) return;
+      // FAR version: cheap stretched box (+ pitched roof for houses). Always built; shown beyond the detail radius.
+      const im = new THREE.InstancedMesh(unit, bMat, list.length); const pal = palette[kd];
       const roofs = kd === 2 ? new THREE.InstancedMesh(houseRoof, hRoofMat, list.length) : null; const caps = kd <= 1 ? new THREE.InstancedMesh(unit, roofMat, list.length) : null;
       list.forEach((o, k) => {
         const wx = mx2x(BD[o]), wz = my2z(BD[o + 1]), w = BD[o + 2], d = BD[o + 3], h = BD[o + 4], rot = BD[o + 5], y = Math.max(hAt(wx, wz), 0);
@@ -148,83 +185,122 @@ function buildChunks(TR, BD, brAnchors) {
         if (roofs) { sv.set(w * 1.1, h * 0.8 + 3, d * 1.1); pv.set(wx, y + h - 0.5, wz); m4.compose(pv, q, sv); roofs.setMatrixAt(k, m4); }
         if (caps) { sv.set(w * 0.5, 2.5 + (o % 3), d * 0.5); pv.set(wx, y + h, wz); m4.compose(pv, q, sv); caps.setMatrixAt(k, m4); }
       });
-      [im, roofs, caps].forEach(x => { if (x) { x.instanceMatrix.needsUpdate = true; x.computeBoundingSphere(); ch.meshes.push(x); } });
+      [im, roofs, caps].forEach(x => { if (x) { x.instanceMatrix.needsUpdate = true; x.computeBoundingSphere(); x.userData.far = kd >= 1 && !!PROPS.casa_simples; ch.meshes.push(x); } });
+      // NEAR version: real kit models (hundreds of triangles each), drawn only in chunks close to the player. Towers (kind 0) have no kit model and stay boxes.
+      if (kd >= 1 && PROPS.casa_simples) {
+        const models = KIND_MODELS[kd], groups = new Map();
+        list.forEach(o => { const mn = models[(o * 2654435761 >>> 0) % models.length]; let g = groups.get(mn); if (!g) groups.set(mn, g = []); g.push(o); });
+        groups.forEach((gl, mn) => {
+          const P = PROPS[mn]; if (!P) return; const dm = new THREE.InstancedMesh(P.geo, propMat, gl.length);
+          gl.forEach((o, k) => {
+            const wx = mx2x(BD[o]), wz = my2z(BD[o + 1]), w = BD[o + 2], d = BD[o + 3], h = BD[o + 4], rot = BD[o + 5], y = Math.max(hAt(wx, wz), 0);
+            q.setFromAxisAngle(up, rot); pv.set(wx, y - 0.4, wz); sv.set(w / P.size[0], (h + 0.4) / P.size[1], d / P.size[2]); m4.compose(pv, q, sv); dm.setMatrixAt(k, m4);
+          });
+          dm.instanceMatrix.needsUpdate = true; dm.computeBoundingSphere(); dm.userData.near = true; ch.meshes.push(dm);
+        });
+      }
     });
     ch.meshes.forEach(m => { m.visible = false; m.frustumCulled = true; world.add(m); }); chunks.push(ch);
   });
 }
 function updateChunks() {
   const cp = camera.position, lim = Q.drawDist + CS * 0.75, lim2 = lim * lim;
+  const nearR = (lim * 0.62) ** 2, propR = (lim * 0.42) ** 2, detR = (Q.detailDist + CS * 0.5) ** 2;      // trees at 62% of draw distance, street props at 42% (a 1 m hydrant is invisible beyond that), real building models only right around the player
   for (const ch of chunks) {
-    const dx = ch.center.x - cp.x, dz = ch.center.z - cp.z, vis = dx * dx + dz * dz < lim2;
-    const near = dx * dx + dz * dz < (lim * 0.62) ** 2;
-    for (const m of ch.meshes) m.visible = m.userData.tree ? near : vis;
+    const dx = ch.center.x - cp.x, dz = ch.center.z - cp.z, d2 = dx * dx + dz * dz, vis = d2 < lim2, near = d2 < nearR, prop = d2 < propR, det = d2 < detR;
+    for (const m of ch.meshes) { const u = m.userData; m.visible = u.near ? det : u.far ? (vis && !det) : u.small ? prop : u.tree ? near : vis; }
   }
 }
 
 
-// ================= ROADS: terrain-following ribbons, merged per chunk (1 draw call per chunk) =================
+// ================= ROADS: terrain-following ribbons, merged per chunk. Asphalt and sidewalks use real PBR textures =================
 // widths in world units (1 map unit = 6 world units). street ~9, main ~14, freeway ~26.
 const ROAD_W = [9, 14, 26];
-const roadMat = new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+const mkRoadMat = (tex, rep, tint) => new THREE.MeshStandardMaterial({ map: tex[0], normalMap: tex[1], normalScale: new THREE.Vector2(0.9, 0.9), color: tint, roughness: 0.92, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+window.__roadMats = null; const roadMats = { asph: mkRoadMat(T.road, 1, 0xb8b4ae), walk: mkRoadMat(T.walk, 1, 0xd6d0c6), paint: new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }) };
+window.__roadMats = roadMats; for (const k of ['asph', 'walk']) roadMats[k].envMapIntensity = 0.35;
 function buildRoads(roads) {
   const buckets = new Map();
-  const put = (key, arr) => { let b = buckets.get(key); if (!b) buckets.set(key, b = { pos: [], col: [], idx: [] }); return b; };
-  const C_ASPH = [[0.20, 0.20, 0.21], [0.17, 0.17, 0.18], [0.14, 0.14, 0.15]];
-  const C_WALK = [0.62, 0.61, 0.58], C_LINE = [0.92, 0.92, 0.88], C_YEL = [0.9, 0.72, 0.15], C_RAIL = [0.55, 0.56, 0.58];
-  // smooth a polyline with Catmull-Rom style subdivision so curves aren't jagged, then resample ~every 14 world units
+  const bucket = key => { let b = buckets.get(key); if (!b) buckets.set(key, b = { asph: { pos: [], uv: [], idx: [] }, walk: { pos: [], uv: [], idx: [] }, paint: { pos: [], col: [], idx: [] } }); return b; };
+  const C_LINE = [0.93, 0.93, 0.9], C_YEL = [0.92, 0.74, 0.14], C_RAIL = [0.55, 0.56, 0.58];
+  // Catmull-Rom smoothing so curves are not jagged, resampled about every 14 world units
   function resample(pts) {
     const out = []; const n = pts.length;
     for (let i = 0; i < n - 1; i++) {
       const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(n - 1, i + 2)];
       const len = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]); const steps = Math.max(1, Math.round(len / 14));
-      for (let s = 0; s < steps; s++) {
-        const t = s / steps, t2 = t * t, t3 = t2 * t;
+      for (let k = 0; k < steps; k++) { const t = k / steps, t2 = t * t, t3 = t2 * t;
         out.push([0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3),
-                  0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)]);
-      }
+                  0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)]); }
     }
     out.push(pts[n - 1]); return out;
   }
-  function strip(b, P, off0, off1, lift, c) {      // a ribbon between lateral offsets off0..off1 along the path
-    const base = b.pos.length / 3;
+  // a ribbon between lateral offsets off0..off1. kind 'tex' writes UVs (u across width in tile units, v along the road), kind 'col' writes a flat colour
+  function strip(g, P, dist, off0, off1, lift, tile, col) {
+    const base = g.pos.length / 3;
     for (let i = 0; i < P.length; i++) {
       const a = P[Math.max(0, i - 1)], d = P[Math.min(P.length - 1, i + 1)];
       let tx = d[0] - a[0], tz = d[1] - a[1]; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l; const nx = -tz, nz = tx;
-      for (const o of [off0, off1]) { const x = P[i][0] + nx * o, z = P[i][1] + nz * o; b.pos.push(x, Math.max(hAt(x, z), 0) + lift + P[i][2], z); b.col.push(c[0], c[1], c[2]); }
+      [off0, off1].forEach((o, k) => { const x = P[i][0] + nx * o, z = P[i][1] + nz * o; g.pos.push(x, Math.max(hAt(x, z), 0) + lift + P[i][2], z);
+        if (g.uv) g.uv.push(k * Math.abs(off1 - off0) / tile, dist[i] / tile); else g.col.push(col[0], col[1], col[2]); });
     }
-    for (let i = 0; i < P.length - 1; i++) { const k = base + i * 2; b.idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
+    for (let i = 0; i < P.length - 1; i++) { const k = base + i * 2; g.idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
   }
   let tris = 0;
   roads.forEach(r => {
     const raw = []; for (let i = 0; i < r.p.length; i += 2) raw.push([mx2x(r.p[i]), my2z(r.p[i + 1])]);
     if (raw.length < 2) return;
     const P = resample(raw); const cls = r.c, W = ROAD_W[cls] / 2;
-    // freeway deck: lift over dips so it reads as an embankment/bridge (height = how far the road sits below its smoothed neighbours)
     for (const p of P) p[2] = 0;
-    if (cls === 2) for (let i = 0; i < P.length; i++) { let m = -1e9; for (let j = Math.max(0, i - 4); j <= Math.min(P.length - 1, i + 4); j++) m = Math.max(m, hAt(P[j][0], P[j][1])); P[i][2] = Math.max(0, Math.min(14, m - hAt(P[i][0], P[i][1]))) ; }
-    // split into per-chunk runs so culling works
-    let run = [], runKey = null;
-    const flush = () => { if (run.length > 1) { const b = put(runKey); const lift = 0.35;
-        strip(b, run, -W, W, lift, C_ASPH[cls]);                               // asphalt
-        strip(b, run, -W, -W + 0.7, lift + 0.12, C_LINE); strip(b, run, W - 0.7, W, lift + 0.12, C_LINE);   // edge lines
-        if (cls >= 1) strip(b, run, -0.35, 0.35, lift + 0.14, cls === 2 ? C_LINE : C_YEL);                   // centre line (yellow on mains)
-        if (cls === 0) { strip(b, run, -W - 2.2, -W, lift + 0.05, C_WALK); strip(b, run, W, W + 2.2, lift + 0.05, C_WALK); }   // sidewalks on streets
-        if (cls === 2) { strip(b, run, -W - 0.9, -W, lift + 0.5, C_RAIL); strip(b, run, W, W + 0.9, lift + 0.5, C_RAIL); }    // freeway barriers
-        tris += run.length * 2 * (cls === 0 ? 4 : cls === 1 ? 4 : 5); }
-      run = []; };
-    P.forEach((pt, i) => { const [a, bq] = chunkOf(pt[0], pt[1]); const k = a + ',' + bq; if (runKey !== null && k !== runKey) { const last = run[run.length - 1]; run.push([pt[0], pt[1], pt[2] || 0]); flush(); run = [[last[0], last[1], last[2]]]; } runKey = k; run.push([pt[0], pt[1], pt[2] || 0]); });
+    if (cls === 2) for (let i = 0; i < P.length; i++) { let m = -1e9; for (let j = Math.max(0, i - 4); j <= Math.min(P.length - 1, i + 4); j++) m = Math.max(m, hAt(P[j][0], P[j][1])); P[i][2] = Math.max(0, Math.min(14, m - hAt(P[i][0], P[i][1]))); }
+    const D = [0]; for (let i = 1; i < P.length; i++) D[i] = D[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
+    let run = [], rd = [], runKey = null;
+    const flush = () => { if (run.length > 1) { const b = bucket(runKey); const lift = 0.35;
+        strip(b.asph, run, rd, -W, W, lift, 9, null);                                                        // asphalt, one texture tile = 9 world units
+        strip(b.paint, run, rd, -W, -W + 0.7, lift + 0.12, 1, C_LINE); strip(b.paint, run, rd, W - 0.7, W, lift + 0.12, 1, C_LINE);
+        if (cls >= 1) strip(b.paint, run, rd, -0.35, 0.35, lift + 0.14, 1, cls === 2 ? C_LINE : C_YEL);
+        if (cls === 0) { strip(b.walk, run, rd, -W - 2.4, -W, lift + 0.05, 4, null); strip(b.walk, run, rd, W, W + 2.4, lift + 0.05, 4, null); }
+        if (cls === 2) { strip(b.paint, run, rd, -W - 0.9, -W, lift + 0.5, 1, C_RAIL); strip(b.paint, run, rd, W, W + 0.9, lift + 0.5, 1, C_RAIL); }
+        tris += run.length * 2 * (cls === 0 ? 5 : cls === 1 ? 4 : 5); }
+      run = []; rd = []; };
+    P.forEach((pt, i) => { const [ca, cb] = chunkOf(pt[0], pt[1]); const k = ca + ',' + cb;
+      if (runKey !== null && k !== runKey) { const last = run[run.length - 1], ld = rd[rd.length - 1]; run.push([pt[0], pt[1], pt[2] || 0]); rd.push(D[i]); flush(); run = [[last[0], last[1], last[2]]]; rd = [ld]; }
+      runKey = k; run.push([pt[0], pt[1], pt[2] || 0]); rd.push(D[i]); });
     flush();
   });
   buckets.forEach((b, key) => {
-    const [a, bq] = key.split(',').map(Number);
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(b.col, 3)); g.setIndex(b.idx); g.computeVertexNormals(); g.computeBoundingSphere();
-    const m = new THREE.Mesh(g, roadMat); m.visible = false; m.userData.road = true; world.add(m);
-    let ch = chunks.find(c => c.cx === a && c.cz === bq);
-    if (!ch) { ch = { cx: a, cz: bq, center: new THREE.Vector3(-HALFW + (a + .5) * CS, 0, -HALFW + (bq + .5) * CS), meshes: [] }; chunks.push(ch); }
-    ch.meshes.push(m);
+    const [ca, cb] = key.split(',').map(Number);
+    let ch = chunks.find(c => c.cx === ca && c.cz === cb);
+    if (!ch) { ch = { cx: ca, cz: cb, center: new THREE.Vector3(-HALFW + (ca + .5) * CS, 0, -HALFW + (cb + .5) * CS), meshes: [] }; chunks.push(ch); }
+    for (const kind of ['asph', 'walk', 'paint']) {
+      const g = b[kind]; if (!g.idx.length) continue;
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
+      if (g.uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2)); else geo.setAttribute('color', new THREE.Float32BufferAttribute(g.col, 3));
+      geo.setIndex(g.idx); geo.computeVertexNormals(); geo.computeBoundingSphere();
+      const m = new THREE.Mesh(geo, roadMats[kind]); m.visible = false; m.userData.road = true; world.add(m); ch.meshes.push(m);
+    }
   });
   window.__roadStats = { chunks: buckets.size, approxTris: tris };
+}
+
+// ================= STREET PROPS: lamps, hydrants, benches, bins, signs, bus stops and traffic from the CC0 city kit =================
+// Real-world heights (metres). The kit models are tiny and un-scaled, so each type has a target height and is scaled uniformly to it.
+const PROP_H = { poste_luz: 7.5, hidrante: 0.8, banco_praca: 1.0, lixeira: 1.1, placa_pare: 2.6, ponto_onibus: 2.8, carro: 1.5, taxi: 1.5, caminhao: 3.4, onibus: 3.2 };
+function buildStreetProps(SP, types) {
+  const buck = new Map(); const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), pv = new THREE.Vector3(), sv = new THREE.Vector3();
+  for (let i = 0; i < SP.length; i += 4) { const wx = mx2x(SP[i]), wz = my2z(SP[i + 1]); const [a, b] = chunkOf(wx, wz); const key = a + ',' + b; let g = buck.get(key); if (!g) buck.set(key, g = []); g.push(i); }
+  let n = 0;
+  buck.forEach((list, key) => {
+    const [ca, cb] = key.split(',').map(Number); let ch = chunks.find(c => c.cx === ca && c.cz === cb);
+    if (!ch) { ch = { cx: ca, cz: cb, center: new THREE.Vector3(-HALFW + (ca + .5) * CS, 0, -HALFW + (cb + .5) * CS), meshes: [] }; chunks.push(ch); }
+    const by = new Map(); list.forEach(o => { const t = types[SP[o + 3]]; let g = by.get(t); if (!g) by.set(t, g = []); g.push(o); });
+    by.forEach((gl, t) => {
+      const P = PROPS[t]; if (!P) return; const im = new THREE.InstancedMesh(P.geo, propMat, gl.length); const sc = PROP_H[t] / P.size[1];
+      gl.forEach((o, k) => { const wx = mx2x(SP[o]), wz = my2z(SP[o + 1]); q.setFromAxisAngle(up, SP[o + 2]); pv.set(wx, Math.max(hAt(wx, wz), 0) - P.min[1] * sc + 0.1, wz); sv.set(sc, sc, sc); m4.compose(pv, q, sv); im.setMatrixAt(k, m4); });
+      im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); im.userData.small = true; im.visible = false; world.add(im); ch.meshes.push(im); n += gl.length;
+    });
+  });
+  window.__propStats = { props: n };
 }
 
 // ================= BIRDS (few, cheap, only update when near the camera) =================
@@ -253,9 +329,9 @@ const districts = [['Los Santos', 800, 255, 900], ['San Fierro', 165, 500, 900],
 
 // ================= MAIN =================
 async function main() {
-  const [aerial, detail, hImg, TR, BD, BR, ROADS] = await Promise.all([
+  const [aerial, detail, hImg, TR, BD, BR, ROADS, SP, SPT] = await Promise.all([
     loadTex('assets/sa_aerial_2k.jpg?v=' + V), loadTex('assets/detail.jpg?v=' + V), loadImg('assets/sa_height.png?v=' + V),
-    loadBin('trees'), loadBin('buildings'), loadBin('birds'), loadJSON('assets/roads.json?v=' + V),
+    loadBin('trees'), loadBin('buildings'), loadBin('birds'), loadJSON('assets/roads.json?v=' + V), loadBin('street'), loadJSON('assets/street_types.json?v=' + V),
   ]);
   aerial.colorSpace = THREE.SRGBColorSpace; aerial.anisotropy = 4; detail.wrapS = detail.wrapT = THREE.RepeatWrapping; detail.colorSpace = THREE.SRGBColorSpace;
   const c = document.createElement('canvas'); c.width = c.height = HN; const cx = c.getContext('2d'); cx.drawImage(hImg, 0, 0, HN, HN);
@@ -278,8 +354,10 @@ async function main() {
   terrain = new THREE.Mesh(geo, tm); scene.add(terrain);
   const sea = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000).rotateX(-Math.PI / 2), seaMat); sea.position.y = -1; scene.add(sea);
 
-  buildChunks(TR, BD, BR); buildRoads(ROADS); buildBirds(BR);
+  await loadProps(); buildChunks(TR, BD, BR); buildRoads(ROADS); buildStreetProps(SP, SPT); buildBirds(BR);
   window.__stats = { chunks: chunks.length, trees: TR.length / 4, buildings: BD.length / 7 };
+  // Poly Haven HDRI (tone-mapped to a 256x128 JPG) as soft image-based lighting for the PBR roads; the visible sky stays the procedural day/sunset/night shader
+  try { const envTex = await texLoader.loadAsync('assets/sky_env.jpg?v=' + V); envTex.mapping = THREE.EquirectangularReflectionMapping; envTex.colorSpace = THREE.SRGBColorSpace; scene.environment = envTex; } catch (e) { console.warn('env map skipped', e); }
   buildCollision(BD); initPlayer(); document.getElementById('load').remove(); applyTime('day'); updateChunks(); frame();
 }
 

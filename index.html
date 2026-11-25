@@ -21,7 +21,7 @@
   window.addEventListener('error', e => fail('Error: ' + e.message + '<small>Try reloading, or a recent Chrome, Edge or Firefox.</small>'));
   window.addEventListener('unhandledrejection', e => fail('Error: ' + ((e.reason && e.reason.message) || e.reason) + '<small>Try reloading.</small>'));
   if (!hasWebGL()) fail('This game needs WebGL (3D graphics).<small>Turn on hardware acceleration in your browser settings, or try Chrome, Edge or Firefox.</small>');
-  else await import('./sa.js?v=1795619771');
+  else await import('./sa.js?v=1795620585');
 </script>
 </body>
 </html>
