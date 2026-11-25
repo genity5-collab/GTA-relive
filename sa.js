@@ -8,8 +8,6 @@ const mx2x = mx => mx * S - HALFW;
 const my2z = my => HALFW - my * S;
 
 const canvas = document.getElementById('c');
-function hasWebGL() { try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch (e) { return false; } }
-if (!hasWebGL() || location.search.includes('flat')) { import('./flat.js'); throw new Error('webgl-fallback'); }
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);

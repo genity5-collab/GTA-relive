@@ -36,6 +36,13 @@ Drag = orbit &nbsp; Right-drag = pan &nbsp; Wheel = zoom<br>
 <canvas id="c"></canvas>
 <div id="tags"></div>
 <script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="sa.js"></script>
+<script type="module">
+  function hasWebGL(){try{const c=document.createElement('canvas');return !!(c.getContext('webgl2')||c.getContext('webgl'));}catch(e){return false;}}
+  const flat=!hasWebGL()||location.search.includes('flat');
+  window.addEventListener('error',e=>{const l=document.getElementById('load');if(l)l.innerHTML='Error: '+e.message+'<small>trying 2D map...</small>';});
+  window.addEventListener('unhandledrejection',e=>{const l=document.getElementById('load');if(l)l.innerHTML='Error: '+(e.reason&&e.reason.message||e.reason);});
+  try{ if(flat) await import('./flat.js'); else await import('./sa.js'); }
+  catch(err){ const l=document.getElementById('load'); if(l) l.innerHTML='Could not start 3D ('+err.message+'). Showing 2D map.'; await import('./flat.js'); }
+</script>
 </body>
 </html>
