@@ -14,7 +14,7 @@ const hud = document.getElementById('hud');
 hud.innerHTML = '<b>2D map mode</b> (your browser has no WebGL, so showing the flat map)<br>Drag = pan &nbsp; Wheel / pinch = zoom &nbsp; Tap a pin for its name<br><small>3D version loads automatically on a device with WebGL</small>';
 const legend = document.getElementById('legend');
 legend.innerHTML = '<b>Regions</b> <small>(click to zoom)</small>';
-const regions = [['Los Santos', 860, 255], ['San Fierro', 165, 560], ['Las Venturas', 690, 700], ['Mount Chiliad', 330, 810], ['Bone County', 150, 800], ['Red County', 780, 400], ['Flint County', 200, 330], ['Tierra Robada', 120, 760]];
+const regions = [['Los Santos', 860, 255], ['San Fierro', 175, 455], ['Las Venturas', 770, 735], ['Mount Chiliad', 395, 835], ['Bone County', 300, 905], ['Red County', 790, 420], ['Flint County', 285, 305], ['Tierra Robada', 120, 740]];
 function zoomTo(mx, my, z) { sc = z; tx = innerWidth / 2 - mx * K * sc; ty = innerHeight / 2 - (MAP - my) * K * sc; stage.style.transition = 'transform .6s'; apply(); setTimeout(() => stage.style.transition = '', 650); }
 regions.forEach(r => {
   const d = document.createElement('div'); d.textContent = r[0]; d.onclick = () => zoomTo(r[1], r[2], 0.9); legend.appendChild(d);
