@@ -92,8 +92,8 @@ const districts = [
 
 async function main() {
   const [aerial, hImg, wImg, airports, buildings, homes, schools] = await Promise.all([
-    loadTex('assets/sa_aerial.jpg'), loadImg('assets/sa_height.png'), loadImg('assets/sa_water.png'),
-    loadJSON('assets/airports.json'), loadJSON('assets/buildings.json'), loadJSON('assets/homes.json'), loadJSON('assets/schools.json'),
+    loadTex('assets/sa_aerial.jpg?v=1795615631'), loadImg('assets/sa_height.png?v=1795615631'), loadImg('assets/sa_water.png?v=1795615631'),
+    loadJSON('assets/airports.json'), loadJSON('assets/buildings.json?v=1795615631'), loadJSON('assets/homes.json'), loadJSON('assets/schools.json'),
   ]);
   aerial.colorSpace = THREE.SRGBColorSpace; aerial.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
@@ -141,7 +141,7 @@ async function main() {
   });
 
   // ============ DETAIL LAYER: trees, buildings, birds ============
-  const [trBuf, bdBuf, brBuf] = await Promise.all(['trees', 'buildings', 'birds'].map(k => fetch(`assets/${k}.bin`).then(r => r.arrayBuffer())));
+  const [trBuf, bdBuf, brBuf] = await Promise.all(['trees', 'buildings', 'birds'].map(k => fetch(`assets/${k}.bin?v=1795615631`).then(r => r.arrayBuffer())));
   const TR = new Float32Array(trBuf), BD = new Float32Array(bdBuf), BR = new Float32Array(brBuf);
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), sv = new THREE.Vector3(), pv = new THREE.Vector3(), col = new THREE.Color();
   const detail = new THREE.Group(); scene.add(detail); window.__detail = detail;

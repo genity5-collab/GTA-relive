@@ -45,7 +45,7 @@ wrap.addEventListener('wheel', e => { e.preventDefault(); const z = Math.min(2.5
 apply();
 
 // density overlay so the flat map also shows the generated detail (trees, buildings, birds)
-Promise.all(['trees', 'buildings', 'birds'].map(k => fetch(`assets/${k}.bin`).then(r => r.arrayBuffer()))).then(([tb, bb, rb]) => {
+Promise.all(['trees', 'buildings', 'birds'].map(k => fetch(`assets/${k}.bin?v=1795615631`).then(r => r.arrayBuffer()))).then(([tb, bb, rb]) => {
   const TR = new Float32Array(tb), BD = new Float32Array(bb), BR = new Float32Array(rb);
   const c = document.createElement('canvas'); c.width = c.height = SZ; c.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none';
   const x = c.getContext('2d');

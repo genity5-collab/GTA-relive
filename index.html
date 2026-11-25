@@ -41,8 +41,8 @@ Drag = orbit &nbsp; Right-drag = pan &nbsp; Wheel = zoom<br>
   const flat=!hasWebGL()||location.search.includes('flat');
   window.addEventListener('error',e=>{const l=document.getElementById('load');if(l)l.innerHTML='Error: '+e.message+'<small>trying 2D map...</small>';});
   window.addEventListener('unhandledrejection',e=>{const l=document.getElementById('load');if(l)l.innerHTML='Error: '+(e.reason&&e.reason.message||e.reason);});
-  try{ if(flat) await import('./flat.js'); else await import('./sa.js'); }
-  catch(err){ const l=document.getElementById('load'); if(l) l.innerHTML='Could not start 3D ('+err.message+'). Showing 2D map.'; await import('./flat.js'); }
+  try{ if(flat) await import('./flat.js?v=1795615631'); else await import('./sa.js?v=1795615631'); }
+  catch(err){ const l=document.getElementById('load'); if(l) l.innerHTML='Could not start 3D ('+err.message+'). Showing 2D map.'; await import('./flat.js?v=1795615631'); }
 </script>
 </body>
 </html>
