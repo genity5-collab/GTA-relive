@@ -80,9 +80,9 @@ function buildMarker(color, wx, wz, kind) {
 }
 
 const districts = [
-  ['Los Santos',    860, 255, 900],
-  ['San Fierro',    175, 455, 900],
-  ['Las Venturas',  770, 735, 900],
+  ['Los Santos',    800, 255, 900],
+  ['San Fierro',    165, 500, 900],
+  ['Las Venturas',  835, 715, 900],
   ['Mount Chiliad', 395, 835, 800],
   ['Bone County',   300, 905, 1400],
   ['Red County',    790, 420, 1400],
@@ -277,9 +277,9 @@ function flyTo(tx, tz, dist, hh) {
 }
 const presets = {
   '1': () => flyTo(0, 0, 7200, 5200),
-  '2': () => flyTo(mx2x(860), my2z(255), 900),
-  '3': () => flyTo(mx2x(175), my2z(455), 900),
-  '4': () => flyTo(mx2x(770), my2z(735), 900),
+  '2': () => flyTo(mx2x(800), my2z(255), 900),
+  '3': () => flyTo(mx2x(165), my2z(500), 900),
+  '4': () => flyTo(mx2x(835), my2z(715), 900),
 };
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
