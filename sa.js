@@ -41,6 +41,7 @@ function applyTime(m) {
   const a = m === 'sunset' ? 0.3 : 1.0;
   sun.position.set(Math.cos(a) * 6000, Math.sin(a) * 6000, 2500);
   document.getElementById('info').dataset.mode = m;
+  if (window.__bMat) { window.__bMat.map = window.__winTex[m === 'night' ? 1 : 0]; window.__bMat.emissive = new THREE.Color(m === 'night' ? 0x332a10 : 0x000000); window.__bMat.needsUpdate = true; }
   renderInfo();
 }
 
@@ -139,15 +140,125 @@ async function main() {
     });
   });
 
-  // sky rings for flavor: cloud puffs
-  const cm = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, fog: false });
-  const clouds = new THREE.Group();
-  for (let i = 0; i < 40; i++) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), cm);
-    m.scale.set(120 + Math.random() * 260, 30 + Math.random() * 30, 100 + Math.random() * 200);
-    m.position.set((Math.random() - 0.5) * 9000, 900 + Math.random() * 500, (Math.random() - 0.5) * 9000); clouds.add(m);
+  // ============ DETAIL LAYER: trees, buildings, birds ============
+  const [trBuf, bdBuf, brBuf] = await Promise.all(['trees', 'buildings', 'birds'].map(k => fetch(`assets/${k}.bin`).then(r => r.arrayBuffer())));
+  const TR = new Float32Array(trBuf), BD = new Float32Array(bdBuf), BR = new Float32Array(brBuf);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), sv = new THREE.Vector3(), pv = new THREE.Vector3(), col = new THREE.Color();
+  const detail = new THREE.Group(); scene.add(detail); window.__detail = detail;
+
+  // ---- trees: 4 species, each a multi-part mesh (trunk + crowns), instanced ----
+  const mk = (geo, color, rough = 1) => new THREE.MeshStandardMaterial({ color, roughness: rough, flatShading: true });
+  function merge(parts) { // parts: [geometry, matrix] -> single BufferGeometry with vertex colors
+    const pos = [], nor = [], colr = [], idx = []; let off = 0;
+    parts.forEach(([g, mat, c]) => {
+      const gg = g.clone().applyMatrix4(mat); const p = gg.attributes.position, n = gg.attributes.normal; const cc = new THREE.Color(c);
+      for (let i = 0; i < p.count; i++) { pos.push(p.getX(i), p.getY(i), p.getZ(i)); nor.push(n.getX(i), n.getY(i), n.getZ(i)); const j = 0.88 + Math.random() * 0.24; colr.push(cc.r * j, cc.g * j, cc.b * j); }
+      if (gg.index) for (let i = 0; i < gg.index.count; i++) idx.push(gg.index.getX(i) + off); else for (let i = 0; i < p.count; i++) idx.push(i + off);
+      off += p.count;
+    });
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); out.setAttribute('color', new THREE.Float32BufferAttribute(colr, 3)); out.setIndex(idx); return out;
   }
+  const T = (x, y, z, rx = 0, rz = 0, sx = 1, sy = 1, sz = 1) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, 0, rz)), new THREE.Vector3(sx, sy, sz));
+  const species = [
+    merge([[new THREE.CylinderGeometry(0.7, 1.1, 9, 6), T(0, 4.5, 0), 0x6b4a2b], [new THREE.ConeGeometry(6, 12, 7), T(0, 13, 0), 0x1f6b3a], [new THREE.ConeGeometry(4.8, 10, 7), T(0, 19, 0), 0x277a44], [new THREE.ConeGeometry(3, 8, 7), T(0, 24, 0), 0x2f8a4e]]), // pine
+    merge([[new THREE.CylinderGeometry(0.9, 1.4, 8, 6), T(0, 4, 0), 0x70502e], [new THREE.IcosahedronGeometry(6.5, 1), T(0, 12, 0, 0, 0, 1, 0.85, 1), 0x3f8f3a], [new THREE.IcosahedronGeometry(4.4, 1), T(4, 10, 2), 0x4aa043], [new THREE.IcosahedronGeometry(4, 1), T(-3.5, 11, -2), 0x388a35]]), // broadleaf
+    merge([[new THREE.CylinderGeometry(0.5, 0.9, 16, 6), T(0, 8, 0, 0, 0.12), 0x9a7b50], ...Array.from({ length: 7 }, (_, i) => { const a = i / 7 * Math.PI * 2; return [new THREE.BoxGeometry(9, 0.3, 2), T(Math.cos(a) * 3.8 + 1.2, 16.5, Math.sin(a) * 3.8, 0.35, 0).multiply(new THREE.Matrix4().makeRotationY(-a)), 0x3aa65a]; })]), // palm
+    merge([[new THREE.CylinderGeometry(1, 1.2, 7, 7), T(0, 3.5, 0), 0x5f8f4f], [new THREE.CylinderGeometry(0.6, 0.7, 3.5, 6), T(2, 5, 0, 0, -0.9), 0x5f8f4f], [new THREE.SphereGeometry(1, 7, 6), T(0, 7, 0), 0x5f8f4f]]), // cactus
+  ];
+  const treeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true });
+  const byType = [[], [], [], []]; for (let i = 0; i < TR.length; i += 4) byType[TR[i + 3]].push(i);
+  byType.forEach((list, t) => {
+    const im = new THREE.InstancedMesh(species[t], treeMat, list.length);
+    list.forEach((o, k) => {
+      const wx = mx2x(TR[o]), wz = my2z(TR[o + 1]), sc = TR[o + 2] * (t === 3 ? 0.8 : 1.15);
+      q.setFromAxisAngle(up, Math.random() * 6.28); pv.set(wx, Math.max(hAt(wx, wz), 0) - 0.5, wz); sv.set(sc, sc * (0.9 + Math.random() * 0.3), sc);
+      m4.compose(pv, q, sv); im.setMatrixAt(k, m4);
+    });
+    im.instanceMatrix.needsUpdate = true; im.frustumCulled = false; detail.add(im);
+  });
+
+  // ---- buildings: window texture generated on a canvas ----
+  function windowTex(lit) {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 128; const x = c.getContext('2d');
+    x.fillStyle = '#9aa7b3'; x.fillRect(0, 0, 64, 128);
+    for (let r = 0; r < 16; r++) for (let k = 0; k < 6; k++) { x.fillStyle = lit ? (Math.random() < 0.55 ? '#ffe7a3' : '#2a3441') : '#46607a'; x.fillRect(4 + k * 10, 3 + r * 8, 6, 5); }
+    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; return t;
+  }
+  const dayWin = windowTex(false), nightWin = windowTex(true);
+  const bMat = new THREE.MeshStandardMaterial({ map: dayWin, roughness: 0.7, metalness: 0.1 });
+  // tile the window texture by the building's real size (floors = height/4, columns = width/3) using the instance matrix scale
+  bMat.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader.replace('#include <uv_vertex>', `#include <uv_vertex>
+      #ifdef USE_INSTANCING
+        vec3 isc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+        vec3 nn = abs(normal);
+        float horiz = nn.x > 0.5 ? isc.z : isc.x;
+        vMapUv = uv * (nn.y > 0.5 ? vec2(1.0) : vec2(max(1.0, floor(horiz / 5.0)) * 0.5, max(1.0, floor(isc.y / 4.0)) / 16.0 * 1.0));
+      #endif`);
+  };
+  window.__bMat = bMat; window.__winTex = [dayWin, nightWin];
+  // box with UVs scaled in the shader-free way: we bake repeat via per-kind geometry
+  const unit = new THREE.BoxGeometry(1, 1, 1); unit.translate(0, 0.5, 0);
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x55606b, roughness: 1 });
+  const houseRoof = new THREE.ConeGeometry(0.78, 0.55, 4); houseRoof.rotateY(Math.PI / 4); houseRoof.translate(0, 0.5 + 0.275, 0);
+  const kinds = [[], [], [], []]; for (let i = 0; i < BD.length; i += 7) kinds[BD[i + 6]].push(i);
+  const palette = [[0xbfc8d2, 0xa4b3c4, 0xd6dde5, 0x8ea1b5], [0xd9c9b0, 0xc4b59c, 0xe3d6c0, 0xb9a98f], [0xf3e3c8, 0xe9c9bd, 0xd4e3c9, 0xe2d6f0, 0xf6dba7], [0x9aa3ab, 0xb0b6bb, 0x8a9096]];
+  kinds.forEach((list, kd) => {
+    if (!list.length) return;
+    const im = new THREE.InstancedMesh(unit, bMat, list.length);
+    const roofs = kd === 2 ? new THREE.InstancedMesh(houseRoof, new THREE.MeshStandardMaterial({ color: 0xa8493a, roughness: 1, flatShading: true }), list.length) : null;
+    const caps = kd <= 1 ? new THREE.InstancedMesh(unit, roofMat, list.length) : null;
+    const pal = palette[kd];
+    list.forEach((o, k) => {
+      const wx = mx2x(BD[o]), wz = my2z(BD[o + 1]), w = BD[o + 2], d = BD[o + 3], h = BD[o + 4], rot = BD[o + 5];
+      const y = Math.max(hAt(wx, wz), 0);
+      q.setFromAxisAngle(up, rot); pv.set(wx, y, wz); sv.set(w, h, d); m4.compose(pv, q, sv); im.setMatrixAt(k, m4);
+      im.setColorAt(k, col.setHex(pal[Math.floor(Math.random() * pal.length)]));
+      if (roofs) { sv.set(w * 1.1, h * 0.9 + 4, d * 1.1); pv.set(wx, y + h - 0.5, wz); m4.compose(pv, q, sv); roofs.setMatrixAt(k, m4); }
+      if (caps) { sv.set(w * 0.55, 2.5 + Math.random() * 3, d * 0.55); pv.set(wx, y + h, wz); m4.compose(pv, q, sv); caps.setMatrixAt(k, m4); }
+    });
+    im.frustumCulled = false; detail.add(im); if (roofs) { roofs.frustumCulled = false; detail.add(roofs); } if (caps) { caps.frustumCulled = false; detail.add(caps); }
+  });
+
+  // ---- birds: animated flocks (wings flap in the vertex shader, boids-ish circling) ----
+  const birdGeo = new THREE.BufferGeometry();
+  birdGeo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 1.2, -0.2, 0, -0.6, 0.2, 0, -0.6, /*left*/ 0, 0, 0.2, -2.6, 0.2, -0.2, 0, 0, -0.5, /*right*/ 0, 0, 0.2, 0, 0, -0.5, 2.6, 0.2, -0.2], 3));
+  birdGeo.computeVertexNormals();
+  const birdMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+  const flockSize = 14, nFlocks = BR.length / 3, nBirds = nFlocks * flockSize;
+  const birds = new THREE.InstancedMesh(birdGeo, birdMat, nBirds); birds.frustumCulled = false;
+  const uTime = { value: 0 };
+  birdMat.onBeforeCompile = sh => {
+    sh.uniforms.uTime = uTime;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;').replace('#include <begin_vertex>', `
+      vec3 transformed = vec3(position);
+      float ph = float(gl_InstanceID) * 1.37;
+      float flap = sin(uTime * 9.0 + ph) * 0.9;
+      transformed.y += abs(position.x) * 0.45 * flap;`);
+  };
+  detail.add(birds);
+  const flock = []; for (let f = 0; f < nFlocks; f++) {
+    const cx = mx2x(BR[f * 3]), cz = my2z(BR[f * 3 + 1]), kind = BR[f * 3 + 2];
+    const base = kind === 0 ? 140 : kind === 1 ? 260 : 90;
+    for (let b = 0; b < flockSize; b++) flock.push({ cx, cz, r: 80 + Math.random() * 260, a: Math.random() * 6.28, sp: (0.15 + Math.random() * 0.25) * (Math.random() < .5 ? 1 : -1), y: base + Math.random() * 90, bob: Math.random() * 6 });
+  }
+  window.__birdUpdate = (t, dt) => {
+    uTime.value = t;
+    for (let i = 0; i < flock.length; i++) {
+      const b = flock[i]; b.a += b.sp * dt * 0.6;
+      const x = b.cx + Math.cos(b.a) * b.r, z = b.cz + Math.sin(b.a) * b.r, y = Math.max(hAt(x, z), 0) + b.y + Math.sin(t * 0.8 + b.bob) * 8;
+      q.setFromAxisAngle(up, -b.a + (b.sp > 0 ? 0 : Math.PI)); pv.set(x, y, z); sv.set(1.6, 1.6, 1.6); m4.compose(pv, q, sv); birds.setMatrixAt(i, m4);
+    }
+    birds.instanceMatrix.needsUpdate = true;
+  };
+
+  // ---- sea gulls near coast already covered by anchors; clouds ----
+  const cm = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, fog: false, depthWrite: false });
+  const clouds = new THREE.Group();
+  for (let i = 0; i < 46; i++) { const c = new THREE.Group(); for (let k = 0; k < 5; k++) { const m = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), cm); m.scale.set(120 + Math.random() * 160, 40 + Math.random() * 30, 90 + Math.random() * 120); m.position.set(k * 110 - 220, Math.random() * 30, Math.random() * 90); c.add(m); } c.position.set((Math.random() - .5) * 11000, 1100 + Math.random() * 600, (Math.random() - .5) * 11000); clouds.add(c); }
   scene.add(clouds); window.__clouds = clouds;
+  document.getElementById('load').firstChild.textContent = 'Starting...';
 
   document.getElementById('load').remove();
   applyTime('day');
@@ -202,6 +313,7 @@ function frame() {
   }
   if (autoRot) { const o = camera.position.clone().sub(controls.target); o.applyAxisAngle(new THREE.Vector3(0, 1, 0), dt * 0.1); camera.position.copy(controls.target).add(o); }
   if (window.__clouds) window.__clouds.position.x = Math.sin(performance.now() / 60000) * 400;
+  if (window.__birdUpdate) window.__birdUpdate(performance.now() / 1000, dt);
   controls.update();
   // keep camera above terrain
   const gh = Math.max(hAt(camera.position.x, camera.position.z), 0) + 25;
